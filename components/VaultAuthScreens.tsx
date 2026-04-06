@@ -1,15 +1,21 @@
 import FontAwesome from '@expo/vector-icons/FontAwesome';
+import { LinearGradient } from 'expo-linear-gradient';
 import React, { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
   Pressable,
+  ScrollView,
   StyleSheet,
+  Text,
   TextInput,
+  View,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { Text, View } from '@/components/Themed';
+import { VaultLuxuryBackground } from '@/components/VaultLuxuryBackground';
+import { vaultTheme } from '@/constants/vaultTheme';
 import { useAuth } from '@/contexts/AuthContext';
 
 export function VaultAuthScreens() {
@@ -29,6 +35,7 @@ export function VaultAuthScreens() {
 }
 
 function SetupPin({ error, onError }: { error: string | null; onError: (s: string | null) => void }) {
+  const insets = useSafeAreaInsets();
   const { setPin } = useAuth();
   const [step, setStep] = useState<'a' | 'b'>('a');
   const [first, setFirst] = useState('');
@@ -63,41 +70,68 @@ function SetupPin({ error, onError }: { error: string | null; onError: (s: strin
   };
 
   return (
-    <KeyboardAvoidingView
-      style={styles.flex}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-      <View style={styles.center}>
-        <FontAwesome name="lock" size={48} color="#6e5494" style={styles.icon} />
-        <Text style={styles.title}>Create vault PIN</Text>
-        <Text style={styles.sub}>
-          {step === 'a' ? 'Choose a PIN (min. 4 digits).' : 'Confirm your PIN.'}
-        </Text>
-        <TextInput
-          value={step === 'a' ? first : second}
-          onChangeText={step === 'a' ? setFirst : setSecond}
-          keyboardType="number-pad"
-          secureTextEntry
-          maxLength={12}
-          style={styles.input}
-          placeholder="••••"
-          placeholderTextColor="#888"
-        />
-        {error ? <Text style={styles.err}>{error}</Text> : null}
-        {busy ? (
-          <ActivityIndicator />
-        ) : (
-          <Pressable
-            style={({ pressed }) => [styles.btn, pressed && styles.btnPressed]}
-            onPress={step === 'a' ? submitFirst : submitSecond}>
-            <Text style={styles.btnText}>{step === 'a' ? 'Continue' : 'Create vault'}</Text>
-          </Pressable>
-        )}
-      </View>
-    </KeyboardAvoidingView>
+    <VaultLuxuryBackground variant="auth">
+      <KeyboardAvoidingView
+        style={styles.flex}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 8 : 0}>
+        <ScrollView
+          style={styles.flex}
+          contentContainerStyle={[
+            styles.scrollContent,
+            {
+              paddingTop: Math.max(insets.top, 24),
+              paddingBottom: Math.max(insets.bottom, 40),
+            },
+          ]}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="on-drag"
+          showsVerticalScrollIndicator={false}
+          bounces={false}>
+          <View style={styles.centerColumn}>
+            <LinearGradient colors={['rgba(212,175,106,0.2)', 'rgba(30,24,48,0.4)']} style={styles.lockOrb}>
+              <FontAwesome name="lock" size={40} color={vaultTheme.champagne} />
+            </LinearGradient>
+            <Text style={styles.kicker}>Samsung-style private space</Text>
+            <Text style={styles.title}>Create your vault PIN</Text>
+            <Text style={styles.sub}>
+              {step === 'a' ? 'Choose a PIN (minimum 4 digits).' : 'Confirm your PIN to finish.'}
+            </Text>
+            <TextInput
+              value={step === 'a' ? first : second}
+              onChangeText={step === 'a' ? setFirst : setSecond}
+              keyboardType="number-pad"
+              secureTextEntry
+              maxLength={12}
+              style={styles.input}
+              placeholder="••••"
+              placeholderTextColor={vaultTheme.textMuted}
+            />
+            {error ? <Text style={styles.err}>{error}</Text> : null}
+            {busy ? (
+              <ActivityIndicator color={vaultTheme.gold} />
+            ) : (
+              <Pressable
+                style={({ pressed }) => [styles.btn, pressed && styles.btnPressed]}
+                onPress={step === 'a' ? submitFirst : submitSecond}>
+                <LinearGradient
+                  colors={[...vaultTheme.gradientGold] as [string, string]}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 1 }}
+                  style={styles.btnGrad}>
+                  <Text style={styles.btnText}>{step === 'a' ? 'Continue' : 'Create vault'}</Text>
+                </LinearGradient>
+              </Pressable>
+            )}
+          </View>
+        </ScrollView>
+      </KeyboardAvoidingView>
+    </VaultLuxuryBackground>
   );
 }
 
 function UnlockPin({ error, onError }: { error: string | null; onError: (s: string | null) => void }) {
+  const insets = useSafeAreaInsets();
   const { unlockWithPin, unlockWithBiometric, biometricEnabled, biometricAvailable } = useAuth();
   const [pin, setPin] = useState('');
   const [busy, setBusy] = useState(false);
@@ -132,94 +166,134 @@ function UnlockPin({ error, onError }: { error: string | null; onError: (s: stri
   };
 
   return (
-    <KeyboardAvoidingView
-      style={styles.flex}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-      <View style={styles.center}>
-        <FontAwesome name="shield" size={48} color="#6e5494" style={styles.icon} />
-        <Text style={styles.title}>Secure vault</Text>
-        <Text style={styles.sub}>Enter PIN to continue</Text>
-        <TextInput
-          value={pin}
-          onChangeText={setPin}
-          keyboardType="number-pad"
-          secureTextEntry
-          maxLength={12}
-          style={styles.input}
-          placeholder="••••"
-          placeholderTextColor="#888"
-          onSubmitEditing={onUnlock}
-        />
-        {error ? <Text style={styles.err}>{error}</Text> : null}
-        {busy ? (
-          <ActivityIndicator />
-        ) : (
-          <>
-            <Pressable
-              style={({ pressed }) => [styles.btn, pressed && styles.btnPressed]}
-              onPress={onUnlock}>
-              <Text style={styles.btnText}>Unlock</Text>
-            </Pressable>
-            {biometricEnabled && biometricAvailable ? (
-              <Pressable
-                style={({ pressed }) => [styles.btnOutline, pressed && styles.btnOutlinePressed]}
-                onPress={onBio}>
-                <Text style={styles.btnOutlineText}>Use biometrics</Text>
-              </Pressable>
-            ) : null}
-          </>
-        )}
-      </View>
-    </KeyboardAvoidingView>
+    <VaultLuxuryBackground variant="auth">
+      <KeyboardAvoidingView
+        style={styles.flex}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 8 : 0}>
+        <ScrollView
+          style={styles.flex}
+          contentContainerStyle={[
+            styles.scrollContent,
+            {
+              paddingTop: Math.max(insets.top, 24),
+              paddingBottom: Math.max(insets.bottom, 40),
+            },
+          ]}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="on-drag"
+          showsVerticalScrollIndicator={false}
+          bounces={false}>
+          <View style={styles.centerColumn}>
+            <LinearGradient colors={['rgba(155,126,217,0.25)', 'rgba(30,24,48,0.35)']} style={styles.lockOrb}>
+              <FontAwesome name="shield" size={38} color={vaultTheme.champagne} />
+            </LinearGradient>
+            <Text style={styles.kicker}>Secured</Text>
+            <Text style={styles.title}>Welcome back</Text>
+            <Text style={styles.sub}>Enter PIN to open your vault</Text>
+            <TextInput
+              value={pin}
+              onChangeText={setPin}
+              keyboardType="number-pad"
+              secureTextEntry
+              maxLength={12}
+              style={styles.input}
+              placeholder="••••"
+              placeholderTextColor={vaultTheme.textMuted}
+              onSubmitEditing={onUnlock}
+            />
+            {error ? <Text style={styles.err}>{error}</Text> : null}
+            {busy ? (
+              <ActivityIndicator color={vaultTheme.gold} />
+            ) : (
+              <>
+                <Pressable style={({ pressed }) => [styles.btn, pressed && styles.btnPressed]} onPress={onUnlock}>
+                  <LinearGradient
+                    colors={[...vaultTheme.gradientGold] as [string, string]}
+                    start={{ x: 0, y: 0 }}
+                    end={{ x: 1, y: 1 }}
+                    style={styles.btnGrad}>
+                    <Text style={styles.btnText}>Unlock vault</Text>
+                  </LinearGradient>
+                </Pressable>
+                {biometricEnabled && biometricAvailable ? (
+                  <Pressable
+                    style={({ pressed }) => [styles.btnOutline, pressed && { opacity: 0.85 }]}
+                    onPress={onBio}>
+                    <Text style={styles.btnOutlineText}>Use biometrics</Text>
+                  </Pressable>
+                ) : null}
+              </>
+            )}
+          </View>
+        </ScrollView>
+      </KeyboardAvoidingView>
+    </VaultLuxuryBackground>
   );
 }
 
 const styles = StyleSheet.create({
   flex: { flex: 1 },
-  center: {
-    flex: 1,
+  scrollContent: {
+    flexGrow: 1,
+    justifyContent: 'center',
+    paddingHorizontal: 24,
+  },
+  centerColumn: {
+    width: '100%',
+    maxWidth: 400,
+    alignSelf: 'center',
+    alignItems: 'center',
+  },
+  lockOrb: {
+    width: 100,
+    height: 100,
+    borderRadius: 36,
     alignItems: 'center',
     justifyContent: 'center',
-    padding: 24,
+    marginBottom: 20,
+    borderWidth: 1,
+    borderColor: vaultTheme.borderStrong,
   },
-  icon: { marginBottom: 16 },
-  title: { fontSize: 22, fontWeight: '700', marginBottom: 8 },
-  sub: { fontSize: 15, opacity: 0.75, marginBottom: 20, textAlign: 'center' },
+  kicker: {
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 2,
+    color: vaultTheme.goldMuted,
+    textTransform: 'uppercase',
+    marginBottom: 8,
+  },
+  title: { fontSize: 26, fontWeight: '800', color: vaultTheme.textPrimary, marginBottom: 8 },
+  sub: { fontSize: 15, color: vaultTheme.textSecondary, marginBottom: 24, textAlign: 'center' },
   input: {
     width: '100%',
-    maxWidth: 280,
+    maxWidth: 300,
     borderWidth: 1,
-    borderColor: '#444',
-    borderRadius: 12,
-    paddingVertical: 14,
-    paddingHorizontal: 16,
-    fontSize: 18,
-    marginBottom: 12,
-    color: '#fff',
-    backgroundColor: '#161b22',
+    borderColor: vaultTheme.borderSubtle,
+    borderRadius: 16,
+    paddingVertical: 16,
+    paddingHorizontal: 20,
+    fontSize: 20,
+    letterSpacing: 4,
+    marginBottom: 14,
+    color: vaultTheme.textPrimary,
+    backgroundColor: vaultTheme.bgGlass,
   },
-  err: { color: '#f85149', marginBottom: 12, textAlign: 'center' },
-  btn: {
-    marginTop: 8,
-    backgroundColor: '#6e5494',
+  err: { color: vaultTheme.danger, marginBottom: 12, textAlign: 'center' },
+  btn: { marginTop: 8, borderRadius: 16, overflow: 'hidden', minWidth: 220 },
+  btnPressed: { opacity: 0.92 },
+  btnGrad: { paddingVertical: 16, paddingHorizontal: 36, alignItems: 'center' },
+  btnText: { color: '#1a1208', fontWeight: '800', fontSize: 16 },
+  btnOutline: {
+    marginTop: 14,
+    borderWidth: 1,
+    borderColor: vaultTheme.borderStrong,
     paddingVertical: 14,
     paddingHorizontal: 32,
-    borderRadius: 12,
-    minWidth: 200,
+    borderRadius: 16,
+    minWidth: 220,
     alignItems: 'center',
+    backgroundColor: vaultTheme.bgGlass,
   },
-  btnPressed: { opacity: 0.85 },
-  btnText: { color: '#fff', fontWeight: '600', fontSize: 16 },
-  btnOutline: {
-    marginTop: 12,
-    borderWidth: 1,
-    borderColor: '#6e5494',
-    paddingVertical: 12,
-    paddingHorizontal: 28,
-    borderRadius: 12,
-    minWidth: 200,
-    alignItems: 'center',
-  },
-  btnOutlinePressed: { opacity: 0.75 },
-  btnOutlineText: { color: '#6e5494', fontWeight: '600' },
+  btnOutlineText: { color: vaultTheme.champagne, fontWeight: '700' },
 });

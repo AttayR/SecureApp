@@ -7,11 +7,13 @@ import {
   Platform,
   Pressable,
   StyleSheet,
+  Text,
   TextInput,
   View,
 } from 'react-native';
 
-import { Text } from '@/components/Themed';
+import { VaultLuxuryBackground } from '@/components/VaultLuxuryBackground';
+import { vaultTheme } from '@/constants/vaultTheme';
 import { makeId } from '@/lib/ids';
 import { addApp, deleteApp, loadApps } from '@/lib/vaultStore';
 import type { VaultAppShortcut } from '@/types/vault';
@@ -73,39 +75,43 @@ export default function AppsScreen() {
 
   if (Platform.OS !== 'android') {
     return (
-      <View style={styles.pad}>
-        <Text style={styles.note}>
-          App shortcuts are available on Android. On this platform, use the system to organize apps.
-        </Text>
-      </View>
+      <VaultLuxuryBackground>
+        <View style={styles.pad}>
+          <Text style={styles.note}>
+            App shortcuts are available on Android. On this platform, use the system to organize apps.
+          </Text>
+        </View>
+      </VaultLuxuryBackground>
     );
   }
 
   return (
-    <View style={styles.flex}>
+    <VaultLuxuryBackground>
       <View style={styles.form}>
-        <Text style={styles.formTitle}>Add app shortcut</Text>
+        <Text style={styles.formTitle}>Private shortcuts</Text>
         <Text style={styles.hint}>
-          After you unlock this vault, tap a shortcut to open that app. This does not clone or sandbox
-          the app like Samsung Knox—it only opens it from a protected list.
+          Launch favourite apps only after unlocking the vault. This does not sandbox apps like Knox—it
+          is an advanced quick-launcher behind your PIN.
         </Text>
         <TextInput
           placeholder="Display name (e.g. WhatsApp)"
-          placeholderTextColor="#888"
+          placeholderTextColor={vaultTheme.textMuted}
           value={label}
           onChangeText={setLabel}
           style={styles.input}
         />
         <TextInput
           placeholder="Package name (e.g. com.whatsapp)"
-          placeholderTextColor="#888"
+          placeholderTextColor={vaultTheme.textMuted}
           value={pkg}
           onChangeText={setPkg}
           autoCapitalize="none"
           autoCorrect={false}
           style={styles.input}
         />
-        <Pressable style={({ pressed }) => [styles.addBtn, pressed && { opacity: 0.85 }]} onPress={() => void addShortcut()}>
+        <Pressable
+          style={({ pressed }) => [styles.addBtn, pressed && { opacity: 0.9 }]}
+          onPress={() => void addShortcut()}>
           <Text style={styles.addBtnText}>Save shortcut</Text>
         </Pressable>
       </View>
@@ -119,51 +125,93 @@ export default function AppsScreen() {
         renderItem={({ item }) => (
           <View style={styles.row}>
             <Pressable style={styles.rowMain} onPress={() => void launch(item.packageName)}>
-              <FontAwesome name="android" size={22} color="#6e5494" style={styles.rowIcon} />
+              <View style={styles.iconRing}>
+                <FontAwesome name="android" size={20} color={vaultTheme.gold} />
+              </View>
               <View style={styles.rowText}>
                 <Text style={styles.rowTitle}>{item.label}</Text>
                 <Text style={styles.rowPkg} numberOfLines={1}>
                   {item.packageName}
                 </Text>
               </View>
-              <FontAwesome name="external-link" size={16} color="#888" />
+              <FontAwesome name="external-link" size={15} color={vaultTheme.textMuted} />
             </Pressable>
             <Pressable hitSlop={12} onPress={() => remove(item.id)} style={styles.trash}>
-              <FontAwesome name="trash" size={18} color="#f85149" />
+              <FontAwesome name="trash" size={17} color={vaultTheme.danger} />
             </Pressable>
           </View>
         )}
       />
-    </View>
+    </VaultLuxuryBackground>
   );
 }
 
 const styles = StyleSheet.create({
-  flex: { flex: 1 },
-  pad: { flex: 1, padding: 20 },
-  note: { fontSize: 15, lineHeight: 22, opacity: 0.8 },
-  form: { padding: 16, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#333' },
-  formTitle: { fontSize: 17, fontWeight: '700', marginBottom: 8 },
-  hint: { fontSize: 13, lineHeight: 18, opacity: 0.7, marginBottom: 12 },
+  pad: { flex: 1, padding: 22 },
+  note: { fontSize: 15, lineHeight: 22, color: vaultTheme.textSecondary },
+  form: {
+    padding: 16,
+    marginHorizontal: 12,
+    marginTop: 8,
+    borderRadius: 18,
+    backgroundColor: vaultTheme.bgCard,
+    borderWidth: 1,
+    borderColor: vaultTheme.borderSubtle,
+    marginBottom: 8,
+  },
+  formTitle: { fontSize: 18, fontWeight: '800', marginBottom: 8, color: vaultTheme.champagne },
+  hint: { fontSize: 13, lineHeight: 19, color: vaultTheme.textSecondary, marginBottom: 14 },
   input: {
     borderWidth: 1,
-    borderColor: '#444',
-    borderRadius: 10,
-    padding: 12,
+    borderColor: vaultTheme.borderSubtle,
+    borderRadius: 14,
+    padding: 14,
     marginBottom: 10,
     fontSize: 16,
-    color: '#fff',
-    backgroundColor: '#161b22',
+    color: vaultTheme.textPrimary,
+    backgroundColor: vaultTheme.bgGlass,
   },
-  addBtn: { backgroundColor: '#6e5494', padding: 14, borderRadius: 12, alignItems: 'center' },
-  addBtnText: { color: '#fff', fontWeight: '600' },
-  list: { paddingVertical: 8 },
-  empty: { textAlign: 'center', opacity: 0.6, padding: 24 },
-  row: { flexDirection: 'row', alignItems: 'center' },
-  rowMain: { flex: 1, flexDirection: 'row', alignItems: 'center', paddingVertical: 14, paddingLeft: 16 },
-  rowIcon: { marginRight: 12 },
+  addBtn: {
+    backgroundColor: vaultTheme.violetDeep,
+    padding: 15,
+    borderRadius: 14,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: vaultTheme.borderStrong,
+    marginTop: 4,
+  },
+  addBtnText: { color: vaultTheme.champagne, fontWeight: '700' },
+  list: { paddingHorizontal: 12, paddingBottom: 32 },
+  empty: { textAlign: 'center', color: vaultTheme.textMuted, padding: 28 },
+  row: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  rowMain: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    borderRadius: 16,
+    backgroundColor: vaultTheme.bgCard,
+    borderWidth: 1,
+    borderColor: vaultTheme.borderSubtle,
+  },
+  iconRing: {
+    width: 42,
+    height: 42,
+    borderRadius: 12,
+    backgroundColor: vaultTheme.bgElevated,
+    borderWidth: 1,
+    borderColor: vaultTheme.borderSubtle,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
+  },
   rowText: { flex: 1 },
-  rowTitle: { fontSize: 16, fontWeight: '600' },
-  rowPkg: { fontSize: 12, opacity: 0.55, marginTop: 2 },
-  trash: { paddingHorizontal: 14, paddingVertical: 12 },
+  rowTitle: { fontSize: 16, fontWeight: '600', color: vaultTheme.textPrimary },
+  rowPkg: { fontSize: 12, color: vaultTheme.textMuted, marginTop: 3 },
+  trash: { paddingHorizontal: 12, paddingVertical: 12 },
 });

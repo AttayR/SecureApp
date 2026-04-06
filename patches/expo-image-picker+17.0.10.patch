@@ -1,0 +1,465 @@
+diff --git a/node_modules/expo-image-picker/android/src/main/java/expo/modules/imagepicker/ImagePickerOptions.kt b/node_modules/expo-image-picker/android/src/main/java/expo/modules/imagepicker/ImagePickerOptions.kt
+index 51b67e4..96753fb 100644
+--- a/node_modules/expo-image-picker/android/src/main/java/expo/modules/imagepicker/ImagePickerOptions.kt
++++ b/node_modules/expo-image-picker/android/src/main/java/expo/modules/imagepicker/ImagePickerOptions.kt
+@@ -58,6 +58,13 @@ internal class ImagePickerOptions : Record, Serializable {
+   @Field
+   val legacy: Boolean = false
+ 
++  /**
++   * When true, after copying the picked file the module may remove the source row via
++   * [ContentResolver.delete] if no MediaStore asset id is available (SecureAPP vault flow).
++   */
++  @Field
++  val preferRemovingOriginal: Boolean = false
++
+   val nativeMediaTypes: MediaTypes
+     get() = MediaTypes.fromJSMediaTypesArray(mediaTypes)
+ 
+diff --git a/node_modules/expo-image-picker/android/src/main/java/expo/modules/imagepicker/ImagePickerResponse.kt b/node_modules/expo-image-picker/android/src/main/java/expo/modules/imagepicker/ImagePickerResponse.kt
+index 5768d92..a0135c4 100644
+--- a/node_modules/expo-image-picker/android/src/main/java/expo/modules/imagepicker/ImagePickerResponse.kt
++++ b/node_modules/expo-image-picker/android/src/main/java/expo/modules/imagepicker/ImagePickerResponse.kt
+@@ -17,7 +17,8 @@ internal class ImagePickerAsset(
+   @Field val base64: String? = null,
+   @Field val exif: Bundle? = null,
+   @Field val duration: Int? = null,
+-  @Field val rotation: Int? = null
++  @Field val rotation: Int? = null,
++  @Field val originalRemovedNatively: Boolean = false
+ ) : Record
+ 
+ internal class ImagePickerResponse(
+diff --git a/node_modules/expo-image-picker/android/src/main/java/expo/modules/imagepicker/ImagePickerUtils.kt b/node_modules/expo-image-picker/android/src/main/java/expo/modules/imagepicker/ImagePickerUtils.kt
+index ba5891e..ff9b7fd 100644
+--- a/node_modules/expo-image-picker/android/src/main/java/expo/modules/imagepicker/ImagePickerUtils.kt
++++ b/node_modules/expo-image-picker/android/src/main/java/expo/modules/imagepicker/ImagePickerUtils.kt
+@@ -2,12 +2,15 @@ package expo.modules.imagepicker
+ 
+ import android.content.ClipData
+ import android.content.ContentResolver
++import android.content.ContentUris
+ import android.content.Context
++import android.database.Cursor
+ import android.content.Intent
+ import android.graphics.Bitmap
+ import android.media.MediaMetadataRetriever
+ import android.net.Uri
+ import android.provider.DocumentsContract
++import android.provider.MediaStore
+ import android.util.Log
+ import android.webkit.MimeTypeMap
+ import androidx.core.content.FileProvider
+@@ -297,5 +300,171 @@ internal fun Uri.getMediaStoreAssetId(): String? {
+     val rawId = DocumentsContract.getDocumentId(this)
+     return if (rawId.contains(':')) rawId.split(':')[1] else rawId
+   }
++
++  // PickVisualMedia / direct MediaStore URIs (not DocumentsContract), e.g.:
++  //   content://media/external/images/media/12345
++  //   content://media/picker/.../media/1000000633
++  val auth = authority ?: return null
++  val trustNumericLastSegment =
++    auth == "media" ||
++      auth.equals("com.android.providers.media", ignoreCase = true) ||
++      auth.contains("photopicker", ignoreCase = true) ||
++      auth.contains("gallery", ignoreCase = true)
++
++  if (trustNumericLastSegment) {
++    val last = pathSegments.lastOrNull() ?: return null
++    if (last.isNotEmpty() && last.all { it.isDigit() } && last.length in 1..19) {
++      return last
++    }
++  }
++
++  return null
++}
++
++private fun readIdFromCursorRow(cursor: Cursor): String? {
++  val named = listOf(
++    MediaStore.MediaColumns._ID,
++    MediaStore.Images.Media._ID,
++    MediaStore.Video.Media._ID,
++    "_id"
++  )
++  for (col in named) {
++    val idx = cursor.getColumnIndex(col)
++    if (idx < 0 || cursor.isNull(idx)) continue
++    when (cursor.getType(idx)) {
++      Cursor.FIELD_TYPE_INTEGER -> return cursor.getLong(idx).toString()
++      Cursor.FIELD_TYPE_STRING -> {
++        val s = cursor.getString(idx)
++        if (s != null && s.isNotEmpty() && s.all { it.isDigit() }) return s
++      }
++    }
++  }
++  for (i in 0 until cursor.columnCount) {
++    val name = cursor.getColumnName(i).lowercase()
++    if (!name.contains("id")) continue
++    if (cursor.isNull(i)) continue
++    if (cursor.getType(i) == Cursor.FIELD_TYPE_INTEGER) {
++      return cursor.getLong(i).toString()
++    }
++  }
+   return null
+ }
++
++/**
++ * ID usable with [expo.modules.medialibrary] delete — path heuristics, then ContentResolver
++ * (Samsung / OEM pickers often need a full projection query).
++ */
++internal fun Uri.resolveAssetIdForMediaLibraryDelete(resolver: ContentResolver): String? {
++  getMediaStoreAssetId()?.let { return it }
++  if (scheme != "content") return null
++
++  runCatching {
++    resolver.query(this, arrayOf(MediaStore.MediaColumns._ID), null, null, null)?.use { c ->
++      if (c.moveToFirst()) readIdFromCursorRow(c)?.let { return it }
++    }
++  }
++
++  runCatching {
++    resolver.query(this, null, null, null, null)?.use { c ->
++      if (c.moveToFirst()) readIdFromCursorRow(c)?.let { return it }
++    }
++  }
++
++  val last = pathSegments.lastOrNull()
++  if (last != null && last.isNotEmpty() && last.all { it.isDigit() } && last.length in 1..19) {
++    return last
++  }
++
++  return null
++}
++
++/**
++ * Fallback when [assetId] and direct [ContentResolver.delete] on the pick URI fail: find a
++ * **single** MediaStore row with matching [displayName] and [sizeBytes], then delete it.
++ * Skips if zero or multiple matches (duplicate filenames).
++ */
++internal fun tryDeleteMediaStoreByDisplayNameAndSize(
++  context: Context,
++  displayName: String?,
++  sizeBytes: Long?,
++  mimeType: String?
++): Boolean {
++  if (displayName.isNullOrBlank() || sizeBytes == null || sizeBytes <= 0L) {
++    return false
++  }
++  val isVideo = mimeType?.startsWith("video") == true
++  val collection =
++    if (isVideo) {
++      MediaStore.Video.Media.EXTERNAL_CONTENT_URI
++    } else {
++      MediaStore.Images.Media.EXTERNAL_CONTENT_URI
++    }
++
++  val projection = arrayOf(MediaStore.MediaColumns._ID)
++  val nameCol = MediaStore.MediaColumns.DISPLAY_NAME
++  val sizeCol = MediaStore.MediaColumns.SIZE
++  val selection = "$nameCol = ? AND $sizeCol = ?"
++  val args = arrayOf(displayName, sizeBytes.toString())
++
++  return runCatching {
++    context.contentResolver.query(collection, projection, selection, args, null)?.use { cursor ->
++      if (cursor.count != 1) {
++        return@use false
++      }
++      if (!cursor.moveToFirst()) {
++        return@use false
++      }
++      val idIdx = cursor.getColumnIndex(MediaStore.MediaColumns._ID)
++      if (idIdx < 0) {
++        return@use false
++      }
++      val id = cursor.getLong(idIdx)
++      val itemUri = ContentUris.withAppendedId(collection, id)
++      context.contentResolver.delete(itemUri, null, null) > 0
++    } ?: false
++  }.getOrDefault(false)
++}
++
++/**
++ * Last resort: delete when exactly one MediaStore row matches [displayName]. Skips if 0 or 2+ rows
++ * (duplicate filenames). Used when SIZE was unavailable or did not match the index.
++ */
++internal fun tryDeleteMediaStoreByDisplayNameOnlyWhenUnique(
++  context: Context,
++  displayName: String?,
++  mimeType: String?
++): Boolean {
++  if (displayName.isNullOrBlank()) {
++    return false
++  }
++  val isVideo = mimeType?.startsWith("video") == true
++  val collection =
++    if (isVideo) {
++      MediaStore.Video.Media.EXTERNAL_CONTENT_URI
++    } else {
++      MediaStore.Images.Media.EXTERNAL_CONTENT_URI
++    }
++
++  val projection = arrayOf(MediaStore.MediaColumns._ID)
++  val nameCol = MediaStore.MediaColumns.DISPLAY_NAME
++  val selection = "$nameCol = ?"
++  val args = arrayOf(displayName)
++
++  return runCatching {
++    context.contentResolver.query(collection, projection, selection, args, null)?.use { cursor ->
++      if (cursor.count != 1) {
++        return@use false
++      }
++      if (!cursor.moveToFirst()) {
++        return@use false
++      }
++      val idIdx = cursor.getColumnIndex(MediaStore.MediaColumns._ID)
++      if (idIdx < 0) {
++        return@use false
++      }
++      val id = cursor.getLong(idIdx)
++      val itemUri = ContentUris.withAppendedId(collection, id)
++      context.contentResolver.delete(itemUri, null, null) > 0
++    } ?: false
++  }.getOrDefault(false)
++}
+diff --git a/node_modules/expo-image-picker/android/src/main/java/expo/modules/imagepicker/MediaHandler.kt b/node_modules/expo-image-picker/android/src/main/java/expo/modules/imagepicker/MediaHandler.kt
+index 22076ad..fa78976 100644
+--- a/node_modules/expo-image-picker/android/src/main/java/expo/modules/imagepicker/MediaHandler.kt
++++ b/node_modules/expo-image-picker/android/src/main/java/expo/modules/imagepicker/MediaHandler.kt
+@@ -25,7 +25,7 @@ internal class MediaHandler(
+   ): ImagePickerResponse {
+     val results = bareResult.map { (mediaType, uri) ->
+       when (mediaType) {
+-        MediaType.VIDEO -> handleVideo(uri)
++        MediaType.VIDEO -> handleVideo(uri, options)
+         MediaType.IMAGE -> handleImage(uri, options)
+         null -> ImagePickerAsset(
+           type = null,
+@@ -64,6 +64,29 @@ internal class MediaHandler(
+ 
+     val fileData = getAdditionalFileData(sourceUri)
+ 
++    val assetId = sourceUri.resolveAssetIdForMediaLibraryDelete(context.contentResolver)
++    var removedByContentResolver =
++      options.preferRemovingOriginal &&
++        assetId == null &&
++        runCatching {
++          context.contentResolver.delete(sourceUri, null, null) > 0
++        }.getOrDefault(false)
++    if (options.preferRemovingOriginal && assetId == null && !removedByContentResolver) {
++      removedByContentResolver = tryDeleteMediaStoreByDisplayNameAndSize(
++        context,
++        fileData?.fileName,
++        fileData?.fileSize,
++        mimeType
++      )
++    }
++    if (options.preferRemovingOriginal && assetId == null && !removedByContentResolver) {
++      removedByContentResolver = tryDeleteMediaStoreByDisplayNameOnlyWhenUnique(
++        context,
++        fileData?.fileName,
++        mimeType
++      )
++    }
++
+     return ImagePickerAsset(
+       type = MediaType.IMAGE,
+       uri = Uri.fromFile(outputFile).toString(),
+@@ -74,29 +97,57 @@ internal class MediaHandler(
+       mimeType = mimeType,
+       base64 = base64,
+       exif = exif,
+-      assetId = sourceUri.getMediaStoreAssetId()
++      assetId = assetId,
++      originalRemovedNatively = removedByContentResolver
+     )
+   }
+ 
+   private fun getAdditionalFileData(uri: Uri): AdditionalFileData? {
+     val queriedFields = listOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE).toTypedArray()
+-    return context.contentResolver.query(uri, queriedFields, null, null, null)?.use { cursor ->
+-      if (!cursor.moveToFirst()) {
+-        return null
++    var name: String? = null
++    var size: Long? = null
++
++    context.contentResolver.query(uri, queriedFields, null, null, null)?.use { cursor ->
++      if (cursor.moveToFirst()) {
++        runCatching {
++          val ni = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
++          if (ni >= 0 && !cursor.isNull(ni)) {
++            name = cursor.getString(ni)
++          }
++          val si = cursor.getColumnIndex(OpenableColumns.SIZE)
++          if (si >= 0 && !cursor.isNull(si)) {
++            val s = cursor.getLong(si)
++            if (s > 0L) {
++              size = s
++            }
++          }
++        }
+       }
++    }
++
++    // Many OEM / Photo Picker URIs omit OpenableColumns.SIZE; stat matches MediaStore better than
++    // post-compression output file length.
++    if (size == null || size!! <= 0L) {
+       runCatching {
+-        val name = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME).takeIf { it != -1 }?.let { cursor.getString(it) }
+-        val size = cursor.getColumnIndex(OpenableColumns.SIZE).takeIf { it != -1 }?.let { cursor.getLong(it) }
+-        AdditionalFileData(
+-          name,
+-          size
+-        )
+-      }.getOrNull()
++        context.contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
++          val len = pfd.statSize
++          if (len > 0L) {
++            size = len
++          }
++        }
++      }
++    }
++
++    return when {
++      !name.isNullOrBlank() -> AdditionalFileData(name, size)
++      size != null && size!! > 0L -> AdditionalFileData(null, size)
++      else -> null
+     }
+   }
+ 
+   private suspend fun handleVideo(
+-    sourceUri: Uri
++    sourceUri: Uri,
++    options: ImagePickerOptions
+   ): ImagePickerAsset {
+     val outputFile = createOutputFile(cacheDirectory, ".mp4")
+     copyFile(sourceUri, outputFile, context.contentResolver)
+@@ -124,17 +175,41 @@ internal class MediaHandler(
+         width = height.also { height = width }
+       }
+ 
++      val assetId = sourceUri.resolveAssetIdForMediaLibraryDelete(context.contentResolver)
++      var removedByContentResolver =
++        options.preferRemovingOriginal &&
++          assetId == null &&
++          runCatching {
++            context.contentResolver.delete(sourceUri, null, null) > 0
++          }.getOrDefault(false)
++      if (options.preferRemovingOriginal && assetId == null && !removedByContentResolver) {
++        removedByContentResolver = tryDeleteMediaStoreByDisplayNameAndSize(
++          context,
++          fileData?.fileName,
++          fileData?.fileSize,
++          mimeType
++        )
++      }
++      if (options.preferRemovingOriginal && assetId == null && !removedByContentResolver) {
++        removedByContentResolver = tryDeleteMediaStoreByDisplayNameOnlyWhenUnique(
++          context,
++          fileData?.fileName,
++          mimeType
++        )
++      }
++
+       return ImagePickerAsset(
+         type = MediaType.VIDEO,
+         uri = outputUri.toString(),
+         width = width,
+         height = height,
+         fileName = fileData?.fileName,
+-        fileSize = fileData?.fileSize,
++        fileSize = fileData?.fileSize ?: outputFile.length().takeIf { it > 0 },
+         mimeType = mimeType,
+         duration = metadataRetriever.extractInt(MediaMetadataRetriever.METADATA_KEY_DURATION),
+         rotation = rotation,
+-        assetId = sourceUri.getMediaStoreAssetId()
++        assetId = assetId,
++        originalRemovedNatively = removedByContentResolver
+       )
+     } catch (cause: FailedToExtractVideoMetadataException) {
+       throw FailedToExtractVideoMetadataException(outputFile, cause)
+diff --git a/node_modules/expo-image-picker/build/ImagePicker.types.d.ts b/node_modules/expo-image-picker/build/ImagePicker.types.d.ts
+index 6bdeeda..7e2ddc1 100644
+--- a/node_modules/expo-image-picker/build/ImagePicker.types.d.ts
++++ b/node_modules/expo-image-picker/build/ImagePicker.types.d.ts
+@@ -244,6 +244,12 @@ export type ImagePickerAsset = {
+      * @platform ios
+      */
+     assetId?: string | null;
++    /**
++     * Android: `true` if the picker removed the source gallery entry via `ContentResolver.delete`
++     * (used when `assetId` was unavailable). iOS always `false`.
++     * @platform android
++     */
++    originalRemovedNatively?: boolean;
+     /**
+      * Width of the image or video. Can be `0` if the system did not provide the width.
+      */
+@@ -519,6 +525,12 @@ export type ImagePickerOptions = {
+      * @default false
+      */
+     legacy?: boolean;
++    /**
++     * Android: after copying the picked file, try to delete the source `content://` row when no MediaStore id is found.
++     * @platform android
++     * @default false
++     */
++    preferRemovingOriginal?: boolean;
+ };
+ /**
+  * @hidden
+diff --git a/node_modules/expo-image-picker/ios/ImagePickerOptions.swift b/node_modules/expo-image-picker/ios/ImagePickerOptions.swift
+index 38bfea9..e134a74 100644
+--- a/node_modules/expo-image-picker/ios/ImagePickerOptions.swift
++++ b/node_modules/expo-image-picker/ios/ImagePickerOptions.swift
+@@ -55,6 +55,9 @@ internal struct ImagePickerOptions: Record {
+   @Field
+   var orderedSelection: Bool = false
+ 
++  @Field
++  var preferRemovingOriginal: Bool = false
++
+   func toMediaTypesArray() -> [String] {
+     var mediaTypesArray = mediaTypes.map { mediaType in
+       mediaType.toUTTypeString()
+diff --git a/node_modules/expo-image-picker/ios/ImagePickerResponse.swift b/node_modules/expo-image-picker/ios/ImagePickerResponse.swift
+index 21b9bb1..fa66ddf 100644
+--- a/node_modules/expo-image-picker/ios/ImagePickerResponse.swift
++++ b/node_modules/expo-image-picker/ios/ImagePickerResponse.swift
+@@ -40,4 +40,5 @@ internal struct AssetInfo: Record {
+   @Field var exif: ExifInfo? = nil
+   @Field var duration: Double? = nil
+   @Field var pairedVideoAsset: AssetInfo? = nil
++  @Field var originalRemovedNatively: Bool = false
+ }
+diff --git a/node_modules/expo-image-picker/src/ImagePicker.types.ts b/node_modules/expo-image-picker/src/ImagePicker.types.ts
+index 84f1a16..93b7f76 100644
+--- a/node_modules/expo-image-picker/src/ImagePicker.types.ts
++++ b/node_modules/expo-image-picker/src/ImagePicker.types.ts
+@@ -261,6 +261,12 @@ export type ImagePickerAsset = {
+    * @platform ios
+    */
+   assetId?: string | null;
++  /**
++   * Android: `true` if the picker removed the source gallery entry via `ContentResolver.delete`
++   * (used when `assetId` was unavailable). iOS always `false`.
++   * @platform android
++   */
++  originalRemovedNatively?: boolean;
+   /**
+    * Width of the image or video. Can be `0` if the system did not provide the width.
+    */
+@@ -548,6 +554,12 @@ export type ImagePickerOptions = {
+    * @default false
+    */
+   legacy?: boolean;
++  /**
++   * Android: after copying the picked file, try to delete the source `content://` row when no MediaStore id is found.
++   * @platform android
++   * @default false
++   */
++  preferRemovingOriginal?: boolean;
+ };
+ 
+ /**

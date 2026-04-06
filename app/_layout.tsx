@@ -1,15 +1,17 @@
 import FontAwesome from '@expo/vector-icons/FontAwesome';
-import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
+import { DarkTheme, ThemeProvider } from '@react-navigation/native';
 import { useFonts } from 'expo-font';
 import { Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
-import { useEffect } from 'react';
+import { StatusBar } from 'expo-status-bar';
+import { useEffect, useMemo } from 'react';
 import { ActivityIndicator, View } from 'react-native';
 import 'react-native-reanimated';
 
-import { useColorScheme } from '@/components/useColorScheme';
+import { VaultHeaderBackground, VaultHeaderTitle } from '@/components/VaultChrome';
 import { VaultAuthScreens } from '@/components/VaultAuthScreens';
 import { AuthProvider, useAuth } from '@/contexts/AuthContext';
+import { vaultTheme } from '@/constants/vaultTheme';
 
 export { ErrorBoundary } from 'expo-router';
 
@@ -18,6 +20,19 @@ export const unstable_settings = {
 };
 
 SplashScreen.preventAutoHideAsync();
+
+const vaultNavigationTheme = {
+  ...DarkTheme,
+  colors: {
+    ...DarkTheme.colors,
+    primary: vaultTheme.gold,
+    background: vaultTheme.bgDeep,
+    card: vaultTheme.headerBg,
+    text: vaultTheme.textPrimary,
+    border: vaultTheme.borderSubtle,
+    notification: vaultTheme.danger,
+  },
+};
 
 export default function RootLayout() {
   const [loaded, error] = useFonts({
@@ -47,14 +62,13 @@ export default function RootLayout() {
 }
 
 function RootLayoutNav() {
-  const colorScheme = useColorScheme();
   const auth = useAuth();
-  const theme = colorScheme === 'dark' ? DarkTheme : DefaultTheme;
+  const theme = useMemo(() => vaultNavigationTheme, []);
 
   if (!auth.ready) {
     return (
-      <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
-        <ActivityIndicator size="large" />
+      <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: vaultTheme.bgDeep }}>
+        <ActivityIndicator size="large" color={vaultTheme.gold} />
       </View>
     );
   }
@@ -62,6 +76,7 @@ function RootLayoutNav() {
   if (!auth.unlocked) {
     return (
       <ThemeProvider value={theme}>
+        <StatusBar style="light" />
         <VaultAuthScreens />
       </ThemeProvider>
     );
@@ -69,9 +84,30 @@ function RootLayoutNav() {
 
   return (
     <ThemeProvider value={theme}>
-      <Stack>
+      <StatusBar style="light" />
+      <Stack
+        screenOptions={{
+          contentStyle: { backgroundColor: vaultTheme.bgDeep },
+          headerBackground: () => <VaultHeaderBackground />,
+          headerTitleAlign: 'left',
+          headerTitle: ({ children }) => <VaultHeaderTitle title={String(children)} />,
+          headerTintColor: vaultTheme.champagne,
+          headerShadowVisible: false,
+        }}>
         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-        <Stack.Screen name="viewer" options={{ title: 'Preview' }} />
+        <Stack.Screen
+          name="viewer"
+          options={{
+            title: 'Preview',
+          }}
+        />
+        <Stack.Screen
+          name="gallery-move"
+          options={{
+            presentation: 'modal',
+            headerShown: false,
+          }}
+        />
         <Stack.Screen name="modal" options={{ presentation: 'modal' }} />
       </Stack>
     </ThemeProvider>
