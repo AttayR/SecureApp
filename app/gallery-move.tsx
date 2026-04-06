@@ -1,15 +1,9 @@
 import FontAwesome from '@expo/vector-icons/FontAwesome';
-import { Image as ExpoImage } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Haptics from 'expo-haptics';
 import * as MediaLibrary from 'expo-media-library';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import {
-  createVideoPlayer,
-  type VideoThumbnail,
-  VideoView,
-  useVideoPlayer,
-} from 'expo-video';
+import { VideoView, useVideoPlayer } from 'expo-video';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -28,6 +22,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { VaultLuxuryBackground } from '@/components/VaultLuxuryBackground';
 import { vaultTheme } from '@/constants/vaultTheme';
 import { useAuth } from '@/contexts/AuthContext';
+import { getVideoThumbnailUri } from '@/lib/vaultAndroid';
 import { moveMediaLibraryAssetsToVault, type MediaStoreMoveAsset } from '@/lib/mediaLibraryMove';
 
 const GAP = 8;
@@ -39,8 +34,8 @@ const CELL = (Dimensions.get('window').width - GRID_PAD * 2 - GAP * (COLS - 1)) 
 type MoveMediaParam = 'photo' | 'video';
 type OriginTabParam = 'photos' | 'video';
 
-const videoThumbnailCache = new Map<string, VideoThumbnail | null>();
-const videoThumbnailTasks = new Map<string, Promise<VideoThumbnail | null>>();
+const videoThumbnailCache = new Map<string, string | null>();
+const videoThumbnailTasks = new Map<string, Promise<string | null>>();
 
 const logMove = (...args: unknown[]) => {
   if (__DEV__) {
@@ -76,7 +71,7 @@ function thumbnailTimeForAsset(asset: MediaLibrary.Asset): number {
   return Math.min(1, asset.duration * 0.18);
 }
 
-async function loadVideoThumbnail(asset: MediaLibrary.Asset): Promise<VideoThumbnail | null> {
+async function loadVideoThumbnail(asset: MediaLibrary.Asset): Promise<string | null> {
   if (videoThumbnailCache.has(asset.id)) {
     return videoThumbnailCache.get(asset.id) ?? null;
   }
@@ -87,12 +82,8 @@ async function loadVideoThumbnail(asset: MediaLibrary.Asset): Promise<VideoThumb
   }
 
   const task = (async () => {
-    const player = createVideoPlayer({ uri: asset.uri });
     try {
-      const thumbs = await player.generateThumbnailsAsync(thumbnailTimeForAsset(asset), {
-        maxWidth: 360,
-      });
-      const thumb = thumbs[0] ?? null;
+      const thumb = await getVideoThumbnailUri(asset.uri, 360);
       videoThumbnailCache.set(asset.id, thumb);
       return thumb;
     } catch (error) {
@@ -106,7 +97,6 @@ async function loadVideoThumbnail(asset: MediaLibrary.Asset): Promise<VideoThumb
       return null;
     } finally {
       videoThumbnailTasks.delete(asset.id);
-      player.release();
     }
   })();
 
@@ -115,7 +105,7 @@ async function loadVideoThumbnail(asset: MediaLibrary.Asset): Promise<VideoThumb
 }
 
 function VideoTileThumbnail({ asset }: { asset: MediaLibrary.Asset }) {
-  const [thumbnail, setThumbnail] = useState<VideoThumbnail | null>(
+  const [thumbnailUri, setThumbnailUri] = useState<string | null>(
     videoThumbnailCache.get(asset.id) ?? null
   );
 
@@ -123,7 +113,7 @@ function VideoTileThumbnail({ asset }: { asset: MediaLibrary.Asset }) {
     let active = true;
 
     if (videoThumbnailCache.has(asset.id)) {
-      setThumbnail(videoThumbnailCache.get(asset.id) ?? null);
+      setThumbnailUri(videoThumbnailCache.get(asset.id) ?? null);
       return () => {
         active = false;
       };
@@ -131,7 +121,7 @@ function VideoTileThumbnail({ asset }: { asset: MediaLibrary.Asset }) {
 
     void loadVideoThumbnail(asset).then((thumb) => {
       if (active) {
-        setThumbnail(thumb);
+        setThumbnailUri(thumb);
       }
     });
 
@@ -140,8 +130,8 @@ function VideoTileThumbnail({ asset }: { asset: MediaLibrary.Asset }) {
     };
   }, [asset]);
 
-  if (thumbnail) {
-    return <ExpoImage source={thumbnail} style={styles.thumb} contentFit="cover" transition={120} />;
+  if (thumbnailUri) {
+    return <Image source={{ uri: thumbnailUri }} style={styles.thumb} />;
   }
 
   return (
