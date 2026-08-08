@@ -1,10 +1,9 @@
 import FontAwesome from '@expo/vector-icons/FontAwesome';
+import { Image } from 'expo-image';
 import { useRouter } from 'expo-router';
 import React, { useMemo } from 'react';
 import {
-  Alert,
   FlatList,
-  Image,
   Pressable,
   RefreshControl,
   StyleSheet,
@@ -12,7 +11,9 @@ import {
   View as RNView,
 } from 'react-native';
 
+import { clearVaultVideoThumb, VaultVideoThumb } from '@/components/VaultVideoThumb';
 import { vaultTheme } from '@/constants/vaultTheme';
+import { confirm, toast } from '@/lib/notify';
 import { absoluteFilePath, deleteItem } from '@/lib/vaultStore';
 import type { VaultItem } from '@/types/vault';
 
@@ -22,7 +23,11 @@ type Props = {
   onRefresh: () => void;
   emptyHint: string;
   searchQuery?: string;
+  /** Show media thumbnails for photo/video rows instead of generic icons. */
+  showMediaThumbs?: boolean;
+  /** @deprecated use showMediaThumbs */
   showPhotoThumbs?: boolean;
+  onClearSearch?: () => void;
 };
 
 export function VaultItemList({
@@ -31,8 +36,11 @@ export function VaultItemList({
   onRefresh,
   emptyHint,
   searchQuery = '',
+  showMediaThumbs,
   showPhotoThumbs = false,
+  onClearSearch,
 }: Props) {
+  const mediaThumbs = showMediaThumbs ?? showPhotoThumbs;
   const router = useRouter();
 
   const filtered = useMemo(() => {
@@ -41,18 +49,26 @@ export function VaultItemList({
     return items.filter((i) => i.name.toLowerCase().includes(q));
   }, [items, searchQuery]);
 
+  const isSearchMiss = filtered.length === 0 && items.length > 0 && searchQuery.trim().length > 0;
+
   const confirmDelete = (item: VaultItem) => {
-    Alert.alert('Remove from vault?', item.name, [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Delete',
-        style: 'destructive',
-        onPress: async () => {
-          await deleteItem(item);
-          onRefresh();
-        },
-      },
-    ]);
+    void (async () => {
+      const ok = await confirm({
+        title: 'Delete from vault?',
+        message: `"${item.name}" will be removed permanently from the vault. It will not be added to your gallery.`,
+        confirmLabel: 'Delete',
+        destructive: true,
+      });
+      if (!ok) return;
+      try {
+        await deleteItem(item);
+        if (item.category === 'video') clearVaultVideoThumb(item.id);
+        onRefresh();
+        toast.success('Deleted', 'Item removed from vault.');
+      } catch {
+        toast.error('Could not delete', 'Something went wrong. Please try again.');
+      }
+    })();
   };
 
   return (
@@ -66,9 +82,20 @@ export function VaultItemList({
       ListEmptyComponent={
         <RNView style={styles.empty}>
           <RNView style={styles.emptyIconRing}>
-            <FontAwesome name="inbox" size={36} color={vaultTheme.goldMuted} />
+            <FontAwesome
+              name={isSearchMiss ? 'search' : 'inbox'}
+              size={36}
+              color={vaultTheme.goldMuted}
+            />
           </RNView>
-          <Text style={styles.emptyText}>{emptyHint}</Text>
+          <Text style={styles.emptyText}>
+            {isSearchMiss ? `No items match “${searchQuery.trim()}”.` : emptyHint}
+          </Text>
+          {isSearchMiss && onClearSearch ? (
+            <Pressable style={styles.clearSearchBtn} onPress={onClearSearch}>
+              <Text style={styles.clearSearchText}>Clear search</Text>
+            </Pressable>
+          ) : null}
         </RNView>
       }
       renderItem={({ item }) => (
@@ -76,9 +103,20 @@ export function VaultItemList({
           <Pressable
             style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}
             onPress={() => router.push({ pathname: '/viewer', params: { id: item.id } })}>
-            {showPhotoThumbs && item.category === 'photo' ? (
+            {mediaThumbs && item.category === 'photo' ? (
               <RNView style={styles.thumbBox}>
-                <Image source={{ uri: absoluteFilePath(item.fileName) }} style={styles.thumbImg} />
+                <Image
+                  source={{ uri: absoluteFilePath(item.fileName) }}
+                  style={styles.thumbImg}
+                  contentFit="cover"
+                />
+              </RNView>
+            ) : mediaThumbs && item.category === 'video' ? (
+              <RNView style={styles.thumbBox}>
+                <VaultVideoThumb item={item} />
+                <RNView style={styles.listPlayDot} pointerEvents="none">
+                  <FontAwesome name="play" size={8} color={vaultTheme.bgDeep} />
+                </RNView>
               </RNView>
             ) : (
               <RNView style={styles.iconRing}>
@@ -134,6 +172,20 @@ const styles = StyleSheet.create({
     backgroundColor: vaultTheme.bgGlass,
   },
   emptyText: { textAlign: 'center', color: vaultTheme.textSecondary, fontSize: 15, lineHeight: 22 },
+  clearSearchBtn: {
+    marginTop: 4,
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: vaultTheme.borderStrong,
+    backgroundColor: vaultTheme.bgGlass,
+  },
+  clearSearchText: {
+    color: vaultTheme.champagne,
+    fontWeight: '700',
+    fontSize: 14,
+  },
   rowWrap: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -175,8 +227,20 @@ const styles = StyleSheet.create({
     marginRight: 12,
     borderWidth: 1,
     borderColor: vaultTheme.borderStrong,
+    backgroundColor: vaultTheme.bgElevated,
   },
   thumbImg: { width: '100%', height: '100%' },
+  listPlayDot: {
+    position: 'absolute',
+    right: 4,
+    bottom: 4,
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: vaultTheme.gold,
+  },
   rowText: { flex: 1 },
   rowTitle: { fontSize: 16, fontWeight: '600', color: vaultTheme.textPrimary },
   rowMeta: { fontSize: 12, color: vaultTheme.textMuted, marginTop: 4 },

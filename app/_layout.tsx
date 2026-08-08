@@ -5,12 +5,13 @@ import { Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useMemo } from 'react';
-import { ActivityIndicator, View } from 'react-native';
+import { ActivityIndicator, Text, View } from 'react-native';
 import 'react-native-reanimated';
 
 import { VaultHeaderBackground, VaultHeaderTitle } from '@/components/VaultChrome';
 import { VaultAuthScreens } from '@/components/VaultAuthScreens';
 import { AuthProvider, useAuth } from '@/contexts/AuthContext';
+import { NotifyProvider } from '@/contexts/NotifyContext';
 import { vaultTheme } from '@/constants/vaultTheme';
 
 export { ErrorBoundary } from 'expo-router';
@@ -56,7 +57,9 @@ export default function RootLayout() {
 
   return (
     <AuthProvider>
-      <RootLayoutNav />
+      <NotifyProvider>
+        <RootLayoutNav />
+      </NotifyProvider>
     </AuthProvider>
   );
 }
@@ -99,6 +102,21 @@ function RootLayoutNav() {
           name="viewer"
           options={{
             title: 'Preview',
+            headerTitleAlign: 'center',
+            // Override root VaultHeaderTitle (eyebrow + title) — viewer sets its own compact header.
+            headerTitle: ({ children }) => (
+              <Text
+                numberOfLines={1}
+                style={{
+                  color: vaultTheme.textPrimary,
+                  fontSize: 15,
+                  fontWeight: '700',
+                  textAlign: 'center',
+                  maxWidth: 220,
+                }}>
+                {children}
+              </Text>
+            ),
           }}
         />
         <Stack.Screen

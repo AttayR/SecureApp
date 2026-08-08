@@ -3,18 +3,26 @@ import FontAwesome from '@expo/vector-icons/FontAwesome';
 import * as Haptics from 'expo-haptics';
 import * as ImagePicker from 'expo-image-picker';
 import { useRouter } from 'expo-router';
-import React, { useCallback, useLayoutEffect, useRef, useState } from 'react';
-import { Alert, Platform, Pressable, StyleSheet, Text } from 'react-native';
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 
+import { ShowcaseModeToggle } from '@/components/ShowcaseModeToggle';
+import { VideoGalleryGrid } from '@/components/VideoGalleryGrid';
 import { VaultItemList } from '@/components/VaultItemList';
 import { VaultLuxuryBackground } from '@/components/VaultLuxuryBackground';
 import { VaultSearchBar } from '@/components/VaultSearchBar';
 import { vaultTheme } from '@/constants/vaultTheme';
 import { useAuth } from '@/contexts/AuthContext';
 import { useVaultItems } from '@/hooks/useVaultItems';
-import { removeGalleryAsset } from '@/lib/galleryVault';
+import { removeGalleryAssets } from '@/lib/galleryVault';
 import { makeId } from '@/lib/ids';
-import { getHideGalleryAfterImport } from '@/lib/vaultPrefs';
+import { toast } from '@/lib/notify';
+import {
+  getHideGalleryAfterImport,
+  getShowcaseMode,
+  setShowcaseMode,
+  type ShowcaseMode,
+} from '@/lib/vaultPrefs';
 import { addItem, ensureVaultReady } from '@/lib/vaultStore';
 
 export default function VideoScreen() {
@@ -24,8 +32,13 @@ export default function VideoScreen() {
   const { items, refresh } = useVaultItems('video');
   const [refreshing, setRefreshing] = useState(false);
   const [query, setQuery] = useState('');
+  const [showcaseMode, setShowcaseModeState] = useState<ShowcaseMode>('icons');
   const [launchingMoveFlow, setLaunchingMoveFlow] = useState(false);
   const actionLockRef = useRef(false);
+
+  useEffect(() => {
+    void getShowcaseMode('video').then(setShowcaseModeState);
+  }, []);
 
   useFocusEffect(
     useCallback(() => {
@@ -39,6 +52,13 @@ export default function VideoScreen() {
     await refresh();
     setRefreshing(false);
   }, [refresh]);
+
+  const clearSearch = useCallback(() => setQuery(''), []);
+
+  const onShowcaseChange = useCallback((mode: ShowcaseMode) => {
+    setShowcaseModeState(mode);
+    void setShowcaseMode('video', mode);
+  }, []);
 
   const pickVideos = useCallback(async () => {
     if (actionLockRef.current || launchingMoveFlow) {
@@ -58,9 +78,11 @@ export default function VideoScreen() {
       }
 
       const releasePermissionLock = suppressBackgroundLock();
-      const perm = await ImagePicker.requestMediaLibraryPermissionsAsync().finally(releasePermissionLock);
+      const perm = await ImagePicker.requestMediaLibraryPermissionsAsync().finally(
+        releasePermissionLock
+      );
       if (!perm.granted) {
-        Alert.alert('Permission needed', 'Allow access to videos to import into the vault.');
+        toast.warning('Permission needed', 'Allow access to videos to import into the vault.');
         return;
       }
       const releasePickerLock = suppressBackgroundLock();
@@ -74,8 +96,8 @@ export default function VideoScreen() {
       await ensureVaultReady();
       let ok = 0;
       let fail = 0;
-      let hideFailed = 0;
       let skippedHideNoId = 0;
+      const assetIdsToRemove: string[] = [];
       for (const a of res.assets) {
         const id = makeId();
         const extMatch = a.uri.match(/\.(\w+)(?:\?|$)/);
@@ -98,14 +120,23 @@ export default function VideoScreen() {
             if (a.originalRemovedNatively === true) {
               /* native ContentResolver.delete already removed gallery row */
             } else if (a.assetId) {
-              const removed = await removeGalleryAsset(a.assetId);
-              if (!removed) hideFailed++;
+              assetIdsToRemove.push(a.assetId);
             } else {
               skippedHideNoId++;
             }
           }
         } catch {
           fail++;
+        }
+      }
+      let hideFailed = 0;
+      if (hideOriginal && assetIdsToRemove.length > 0) {
+        const releaseDeleteLock = suppressBackgroundLock();
+        try {
+          const removed = await removeGalleryAssets(assetIdsToRemove);
+          hideFailed = Math.max(0, assetIdsToRemove.length - removed);
+        } finally {
+          releaseDeleteLock();
         }
       }
       await refresh();
@@ -122,12 +153,16 @@ export default function VideoScreen() {
             `${hideFailed} original(s) could not be deleted — allow full Photos/video access in system settings.`
           );
         }
-        Alert.alert('Gallery copies may remain', lines.join(' '));
-      } else if (fail > 0 || ok > 1) {
-        Alert.alert(
+        toast.warning('Gallery copies may remain', lines.join(' '));
+      } else if (fail > 0) {
+        toast.info(
           'Import finished',
           `${ok} video${ok === 1 ? '' : 's'} imported.${fail ? ` ${fail} failed.` : ''}`
         );
+      } else if (ok > 1) {
+        toast.success('Imported', `${ok} videos added to your vault.`);
+      } else if (ok === 1) {
+        toast.success('Imported', 'Video added to your vault.');
       }
     } finally {
       if (!keepLockedForMove) {
@@ -139,32 +174,48 @@ export default function VideoScreen() {
   useLayoutEffect(() => {
     navigation.setOptions({
       headerRight: () => (
-        <Pressable
-          onPress={() => void pickVideos()}
-          hitSlop={12}
-          disabled={launchingMoveFlow}
-          style={styles.headerBtn}>
-          <FontAwesome name="plus" size={22} color={vaultTheme.gold} />
-        </Pressable>
+        <View style={styles.headerRow}>
+          <ShowcaseModeToggle mode={showcaseMode} onChange={onShowcaseChange} />
+          <Pressable
+            onPress={() => void pickVideos()}
+            hitSlop={12}
+            disabled={launchingMoveFlow}
+            style={styles.headerBtn}
+            accessibilityLabel="Import videos">
+            <FontAwesome name="plus" size={22} color={vaultTheme.gold} />
+          </Pressable>
+        </View>
       ),
     });
-  }, [navigation, pickVideos]);
+  }, [launchingMoveFlow, navigation, onShowcaseChange, pickVideos, showcaseMode]);
 
   return (
     <VaultLuxuryBackground>
       <Text style={styles.hint}>
-        Select multiple videos from your library. On Android, turning on “Remove originals from
-        gallery” opens a move-from-gallery view so AR Vault can remove the exact original after a
-        successful import.
+        Tap + to import. Use the header switch for Icons or List view. Turn on “Remove originals
+        from gallery” in Settings to keep videos private after import.
       </Text>
       <VaultSearchBar value={query} onChangeText={setQuery} placeholder="Search videos…" />
-      <VaultItemList
-        items={items}
-        refreshing={refreshing}
-        onRefresh={() => void onRefresh()}
-        emptyHint="Tap + to import videos. On Android, “Remove originals” opens a move-from-gallery flow; otherwise imports keep the public copy."
-        searchQuery={query}
-      />
+      {showcaseMode === 'icons' ? (
+        <VideoGalleryGrid
+          items={items}
+          searchQuery={query}
+          refreshing={refreshing}
+          onRefresh={() => void onRefresh()}
+          onClearSearch={clearSearch}
+          emptyHint="No videos yet. Tap + to import into your private vault."
+        />
+      ) : (
+        <VaultItemList
+          items={items}
+          refreshing={refreshing}
+          onRefresh={() => void onRefresh()}
+          onClearSearch={clearSearch}
+          emptyHint="No videos yet. Tap + to import, or switch to Icons view."
+          searchQuery={query}
+          showMediaThumbs
+        />
+      )}
     </VaultLuxuryBackground>
   );
 }
@@ -173,9 +224,11 @@ const styles = StyleSheet.create({
   hint: {
     color: vaultTheme.textSecondary,
     fontSize: 13,
+    lineHeight: 18,
     paddingHorizontal: 16,
     marginTop: 8,
     marginBottom: 4,
   },
-  headerBtn: { marginRight: 16, padding: 4 },
+  headerRow: { flexDirection: 'row', alignItems: 'center', marginRight: 8, gap: 4 },
+  headerBtn: { padding: 8 },
 });

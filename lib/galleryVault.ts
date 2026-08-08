@@ -150,12 +150,24 @@ export async function removeGalleryAssetByPickerMatch(params: {
  */
 export async function removeGalleryAsset(assetId: string | null | undefined): Promise<boolean> {
   if (!assetId) return false;
+  const removed = await removeGalleryAssets([assetId]);
+  return removed > 0;
+}
+
+/**
+ * Batch-delete gallery assets in one system prompt (important on iOS multi-import).
+ * Returns how many ids were accepted for deletion.
+ */
+export async function removeGalleryAssets(assetIds: string[]): Promise<number> {
+  const unique = [...new Set(assetIds.filter((id) => typeof id === 'string' && id.length > 0))];
+  if (unique.length === 0) return 0;
   try {
     const perm = await MediaLibrary.requestPermissionsAsync();
-    if (!perm.granted) return false;
-    return await MediaLibrary.deleteAssetsAsync(assetId);
+    if (!perm.granted) return 0;
+    const ok = await MediaLibrary.deleteAssetsAsync(unique);
+    return ok ? unique.length : 0;
   } catch {
-    return false;
+    return 0;
   }
 }
 

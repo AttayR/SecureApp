@@ -2,7 +2,6 @@ import FontAwesome from '@expo/vector-icons/FontAwesome';
 import * as IntentLauncher from 'expo-intent-launcher';
 import React, { useCallback, useState } from 'react';
 import {
-  Alert,
   FlatList,
   Platform,
   Pressable,
@@ -15,6 +14,7 @@ import {
 import { VaultLuxuryBackground } from '@/components/VaultLuxuryBackground';
 import { vaultTheme } from '@/constants/vaultTheme';
 import { makeId } from '@/lib/ids';
+import { confirm, toast } from '@/lib/notify';
 import { addApp, deleteApp, loadApps } from '@/lib/vaultStore';
 import type { VaultAppShortcut } from '@/types/vault';
 
@@ -35,24 +35,25 @@ export default function AppsScreen() {
     const trimmedLabel = label.trim();
     const trimmedPkg = pkg.trim();
     if (!trimmedLabel || !trimmedPkg) {
-      Alert.alert('Missing info', 'Enter a display name and the Android package name.');
+      toast.warning('Missing info', 'Enter a display name and the Android package name.');
       return;
     }
     await addApp({ id: makeId(), label: trimmedLabel, packageName: trimmedPkg });
     setLabel('');
     setPkg('');
     await reload();
+    toast.success('Shortcut added');
   };
 
   const launch = async (packageName: string) => {
     if (Platform.OS !== 'android') {
-      Alert.alert('Android only', 'Launching installed apps by package is supported on Android.');
+      toast.info('Android only', 'Launching installed apps by package is supported on Android.');
       return;
     }
     try {
       IntentLauncher.openApplication(packageName);
     } catch {
-      Alert.alert(
+      toast.error(
         'Could not open app',
         'Check the package name in Settings → Apps → App details (e.g. com.whatsapp).'
       );
@@ -60,17 +61,18 @@ export default function AppsScreen() {
   };
 
   const remove = (id: string) => {
-    Alert.alert('Remove shortcut?', undefined, [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Remove',
-        style: 'destructive',
-        onPress: async () => {
-          await deleteApp(id);
-          await reload();
-        },
-      },
-    ]);
+    void (async () => {
+      const ok = await confirm({
+        title: 'Remove shortcut?',
+        message: 'This removes the shortcut from AR Vault. The installed app stays on your phone.',
+        confirmLabel: 'Remove',
+        destructive: true,
+      });
+      if (!ok) return;
+      await deleteApp(id);
+      await reload();
+      toast.success('Shortcut removed');
+    })();
   };
 
   if (Platform.OS !== 'android') {

@@ -13,14 +13,13 @@ import {
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
-  Dimensions,
   FlatList,
   Image,
   Platform,
   Pressable,
   StyleSheet,
   Text,
+  useWindowDimensions,
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -29,12 +28,12 @@ import { VaultLuxuryBackground } from '@/components/VaultLuxuryBackground';
 import { vaultTheme } from '@/constants/vaultTheme';
 import { useAuth } from '@/contexts/AuthContext';
 import { moveMediaLibraryAssetsToVault, type MediaStoreMoveAsset } from '@/lib/mediaLibraryMove';
+import { toast } from '@/lib/notify';
 
 const GAP = 8;
 const GRID_PAD = 16;
 const COLS = 3;
 const PAGE_SIZE = 90;
-const CELL = (Dimensions.get('window').width - GRID_PAD * 2 - GAP * (COLS - 1)) / COLS;
 
 type MoveMediaParam = 'photo' | 'video';
 type OriginTabParam = 'photos' | 'video';
@@ -199,6 +198,8 @@ function VideoPreviewCard({ asset }: { asset: MediaLibrary.Asset }) {
 export default function GalleryMoveScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const { width: windowWidth } = useWindowDimensions();
+  const cell = (windowWidth - GRID_PAD * 2 - GAP * (COLS - 1)) / COLS;
   const { suppressBackgroundLock } = useAuth();
   const params = useLocalSearchParams<{ media?: string | string[]; origin?: string | string[] }>();
   const rawMediaParam = Array.isArray(params.media) ? params.media[0] : params.media;
@@ -228,19 +229,21 @@ export default function GalleryMoveScreen() {
   const granularPermission = media === 'video' ? 'video' : 'photo';
   const selectedSet = useMemo(() => new Set(selectedIds), [selectedIds]);
   const fallbackHref = originTab === 'video' ? '/video' : '/photos';
+  // Only show a live preview after an explicit long-press — never auto-pick first/last video.
   const previewAsset = useMemo(
     () =>
-      media === 'video'
-        ? assets.find((asset) => asset.id === previewAssetId) ??
-          assets.find((asset) => selectedSet.has(asset.id)) ??
-          assets[0] ??
-          null
+      media === 'video' && previewAssetId
+        ? assets.find((asset) => asset.id === previewAssetId) ?? null
         : null,
-    [assets, media, previewAssetId, selectedSet]
+    [assets, media, previewAssetId]
   );
 
   const exitScreen = useCallback(() => {
     logMove('Exiting screen', { fallbackHref });
+    if (router.canGoBack()) {
+      router.back();
+      return;
+    }
     router.replace(fallbackHref);
   }, [fallbackHref, router]);
 
@@ -249,9 +252,10 @@ export default function GalleryMoveScreen() {
       if (blockedRef.current) return;
       blockedRef.current = true;
       logMove('Blocking alert', { title, message });
-      Alert.alert(title, message, [{ text: 'OK', onPress: exitScreen }], {
-        cancelable: false,
-      });
+      toast.error(title, message);
+      setTimeout(() => {
+        exitScreen();
+      }, 1600);
     },
     [exitScreen]
   );
@@ -292,12 +296,11 @@ export default function GalleryMoveScreen() {
       return;
     }
 
-    if (rawMediaParam == null) {
-      return;
-    }
-
-    if (!media) {
-      showBlockingAlertAndExit('Invalid request', 'The gallery move screen was opened without a valid media type.');
+    if (rawMediaParam == null || !media) {
+      showBlockingAlertAndExit(
+        'Invalid request',
+        'The gallery move screen was opened without a valid media type.'
+      );
       return;
     }
 
@@ -355,17 +358,10 @@ export default function GalleryMoveScreen() {
 
   useEffect(() => {
     if (media !== 'video') return;
-
-    if (!assets.length) {
+    if (!previewAssetId) return;
+    if (!assets.length || !assets.some((asset) => asset.id === previewAssetId)) {
       setPreviewAssetId(null);
-      return;
     }
-
-    if (previewAssetId && assets.some((asset) => asset.id === previewAssetId)) {
-      return;
-    }
-
-    setPreviewAssetId(assets[0]?.id ?? null);
   }, [assets, media, previewAssetId]);
 
   const toggleSelected = useCallback((assetId: string) => {
@@ -402,10 +398,15 @@ export default function GalleryMoveScreen() {
   );
 
   const completeAndExit = useCallback(
-    (title: string, message: string) => {
-      Alert.alert(title, message, [{ text: 'OK', onPress: exitScreen }], {
-        cancelable: false,
-      });
+    (title: string, message: string, tone: 'success' | 'error' | 'info' | 'warning' = 'info') => {
+      // Toast only — never system Alert. Exit after a short beat so the toast is readable.
+      if (tone === 'success') toast.success(title, message, 3200);
+      else if (tone === 'error') toast.error(title, message, 3400);
+      else if (tone === 'warning') toast.warning(title, message, 3400);
+      else toast.info(title, message, 3200);
+      setTimeout(() => {
+        exitScreen();
+      }, 900);
     },
     [exitScreen]
   );
@@ -442,7 +443,8 @@ export default function GalleryMoveScreen() {
       if (result.importedCount === 0) {
         completeAndExit(
           'Move failed',
-          `No ${media === 'video' ? 'videos' : 'photos'} were copied into your vault.`
+          `No ${media === 'video' ? 'videos' : 'photos'} were copied into your vault.`,
+          'error'
         );
         return;
       }
@@ -459,18 +461,19 @@ export default function GalleryMoveScreen() {
         lines.push(
           `${result.deleteRequestedCount} imported item(s) could not be removed from the gallery. Delete those originals manually if you still want them gone.`
         );
-        completeAndExit('Gallery copies may remain', lines.join(' '));
+        completeAndExit('Gallery copies may remain', lines.join(' '), 'warning');
         return;
       }
 
-      completeAndExit('Moved', lines.join(' '));
+      completeAndExit('Moved', lines.join(' '), 'success');
     } catch (error) {
       logMove('Move failed', {
         error: error instanceof Error ? error.message : String(error),
       });
       completeAndExit(
         'Move failed',
-        error instanceof Error ? error.message : 'Could not move the selected items.'
+        error instanceof Error ? error.message : 'Could not move the selected items.',
+        'error'
       );
     } finally {
       setMoving(false);
@@ -485,15 +488,19 @@ export default function GalleryMoveScreen() {
       return (
         <Pressable
           disabled={moving}
-          onPress={() => {
-            if (media === 'video') {
-              setPreviewAssetId(item.id);
-            }
-            toggleSelected(item.id);
-          }}
+          onPress={() => toggleSelected(item.id)}
+          onLongPress={
+            media === 'video'
+              ? () => {
+                  setPreviewAssetId(item.id);
+                  void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                }
+              : undefined
+          }
+          delayLongPress={280}
           style={({ pressed }) => [
             styles.cellWrap,
-            { width: CELL },
+            { width: cell },
             pressed && !moving && { opacity: 0.92 },
           ]}>
           {media === 'photo' ? (
@@ -529,7 +536,7 @@ export default function GalleryMoveScreen() {
         </Pressable>
       );
     },
-    [media, moving, previewAsset?.id, selectedSet, toggleSelected]
+    [cell, media, moving, previewAsset?.id, selectedSet, toggleSelected]
   );
 
   const listHeader = useMemo(
@@ -548,12 +555,15 @@ export default function GalleryMoveScreen() {
           </View>
         </View>
 
-        {media === 'video' && previewAsset ? (
+        {media === 'video' ? (
           <View>
-            <VideoPreviewCard key={previewAsset.id} asset={previewAsset} />
+            {previewAsset ? (
+              <VideoPreviewCard key={previewAsset.id} asset={previewAsset} />
+            ) : null}
             <Text style={styles.previewHint}>
-              Tap any clip below to update the preview, then choose the videos you want to move into
-              AR Vault.
+              {previewAsset
+                ? 'Long-press another clip to change the live preview. Tap to select for move.'
+                : 'Long-press a clip to open its live preview. Tap to select videos to move.'}
             </Text>
           </View>
         ) : null}

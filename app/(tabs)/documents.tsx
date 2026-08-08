@@ -3,7 +3,7 @@ import FontAwesome from '@expo/vector-icons/FontAwesome';
 import * as DocumentPicker from 'expo-document-picker';
 import * as Haptics from 'expo-haptics';
 import React, { useCallback, useLayoutEffect, useState } from 'react';
-import { Alert, Pressable, StyleSheet, Text } from 'react-native';
+import { Pressable, StyleSheet, Text } from 'react-native';
 
 import { VaultItemList } from '@/components/VaultItemList';
 import { VaultLuxuryBackground } from '@/components/VaultLuxuryBackground';
@@ -12,6 +12,7 @@ import { vaultTheme } from '@/constants/vaultTheme';
 import { useAuth } from '@/contexts/AuthContext';
 import { useVaultItems } from '@/hooks/useVaultItems';
 import { makeId } from '@/lib/ids';
+import { toast } from '@/lib/notify';
 import { addItem, ensureVaultReady } from '@/lib/vaultStore';
 
 export default function DocumentsScreen() {
@@ -68,11 +69,15 @@ export default function DocumentsScreen() {
       }
       await refresh();
       if (ok > 0) void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      if (fail > 0 || ok > 1) {
-        Alert.alert(
+      if (fail > 0) {
+        toast.info(
           'Import finished',
           `${ok} file${ok === 1 ? '' : 's'} imported.${fail ? ` ${fail} failed.` : ''}`
         );
+      } else if (ok > 1) {
+        toast.success('Imported', `${ok} documents added to your vault.`);
+      } else if (ok === 1) {
+        toast.success('Imported', 'Document added to your vault.');
       }
     } finally {
       setImporting(false);

@@ -3,19 +3,26 @@ import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import * as Haptics from 'expo-haptics';
 import * as ImagePicker from 'expo-image-picker';
 import { useRouter } from 'expo-router';
-import React, { useCallback, useLayoutEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { ActivityIndicator, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { PhotoGalleryGrid } from '@/components/PhotoGalleryGrid';
+import { ShowcaseModeToggle } from '@/components/ShowcaseModeToggle';
 import { VaultItemList } from '@/components/VaultItemList';
 import { VaultLuxuryBackground } from '@/components/VaultLuxuryBackground';
 import { VaultSearchBar } from '@/components/VaultSearchBar';
 import { vaultTheme } from '@/constants/vaultTheme';
 import { useAuth } from '@/contexts/AuthContext';
 import { useVaultItems } from '@/hooks/useVaultItems';
-import { removeGalleryAsset } from '@/lib/galleryVault';
+import { removeGalleryAssets } from '@/lib/galleryVault';
 import { makeId } from '@/lib/ids';
-import { getHideGalleryAfterImport } from '@/lib/vaultPrefs';
+import { toast } from '@/lib/notify';
+import {
+  getHideGalleryAfterImport,
+  getShowcaseMode,
+  setShowcaseMode,
+  type ShowcaseMode,
+} from '@/lib/vaultPrefs';
 import { addItem, ensureVaultReady } from '@/lib/vaultStore';
 
 const logImport = (...args: unknown[]) => {
@@ -31,10 +38,14 @@ export default function PhotosScreen() {
   const { items, refresh } = useVaultItems('photo');
   const [refreshing, setRefreshing] = useState(false);
   const [query, setQuery] = useState('');
-  const [galleryMode, setGalleryMode] = useState(true);
+  const [showcaseMode, setShowcaseModeState] = useState<ShowcaseMode>('icons');
   const [importing, setImporting] = useState(false);
   const [launchingMoveFlow, setLaunchingMoveFlow] = useState(false);
   const actionLockRef = useRef(false);
+
+  useEffect(() => {
+    void getShowcaseMode('photo').then(setShowcaseModeState);
+  }, []);
 
   useFocusEffect(
     useCallback(() => {
@@ -43,11 +54,18 @@ export default function PhotosScreen() {
     }, [])
   );
 
+  const onShowcaseChange = useCallback((mode: ShowcaseMode) => {
+    setShowcaseModeState(mode);
+    void setShowcaseMode('photo', mode);
+  }, []);
+
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     await refresh();
     setRefreshing(false);
   }, [refresh]);
+
+  const clearSearch = useCallback(() => setQuery(''), []);
 
   const pickPhotos = useCallback(async () => {
     if (actionLockRef.current || importing || launchingMoveFlow) {
@@ -75,16 +93,19 @@ export default function PhotosScreen() {
       }
 
       const releasePermissionLock = suppressBackgroundLock();
-      const perm = await ImagePicker.requestMediaLibraryPermissionsAsync().finally(releasePermissionLock);
+      const perm = await ImagePicker.requestMediaLibraryPermissionsAsync().finally(
+        releasePermissionLock
+      );
       logImport('ImagePicker permission', perm);
       if (!perm.granted) {
-        Alert.alert('Permission needed', 'Allow photo access to import into your vault.');
+        toast.warning('Permission needed', 'Allow photo access to import into your vault.');
         return;
       }
       const releasePickerLock = suppressBackgroundLock();
+      // quality: 1 keeps original bytes (no recompress). Critical when originals are removed.
       const res = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ['images'],
-        quality: 0.92,
+        quality: 1,
         allowsEditing: false,
         allowsMultipleSelection: true,
         selectionLimit: 0,
@@ -112,8 +133,9 @@ export default function PhotosScreen() {
       await ensureVaultReady();
       let ok = 0;
       let fail = 0;
-      let hideFailed = 0;
       let skippedHideNoId = 0;
+      const assetIdsToRemove: string[] = [];
+
       for (const a of res.assets) {
         const id = makeId();
         const extMatch = a.uri.match(/\.(\w+)(?:\?|$)/);
@@ -137,9 +159,7 @@ export default function PhotosScreen() {
             if (a.originalRemovedNatively === true) {
               logImport('Gallery: native already removed original', { fileName: a.fileName });
             } else if (a.assetId) {
-              const removed = await removeGalleryAsset(a.assetId);
-              logImport('Gallery: MediaLibrary.delete', { assetId: a.assetId, removed });
-              if (!removed) hideFailed++;
+              assetIdsToRemove.push(a.assetId);
             } else {
               skippedHideNoId++;
               logImport('Gallery: could not remove (no assetId, native did not remove)', {
@@ -152,6 +172,23 @@ export default function PhotosScreen() {
           logImport('Import item failed', { fileName: a.fileName, error: String(e) });
         }
       }
+
+      let hideFailed = 0;
+      if (hideOriginal && assetIdsToRemove.length > 0) {
+        const releaseDeleteLock = suppressBackgroundLock();
+        try {
+          const removed = await removeGalleryAssets(assetIdsToRemove);
+          hideFailed = Math.max(0, assetIdsToRemove.length - removed);
+          logImport('Gallery: batch MediaLibrary.delete', {
+            requested: assetIdsToRemove.length,
+            removed,
+            hideFailed,
+          });
+        } finally {
+          releaseDeleteLock();
+        }
+      }
+
       await refresh();
       logImport('Import batch done', { ok, fail, hideFailed, skippedHideNoId, hideOriginal });
       if (ok > 0) {
@@ -169,14 +206,16 @@ export default function PhotosScreen() {
             `${hideFailed} original(s) could not be deleted — allow full Photos access for this app in system settings, or remove duplicates manually.`
           );
         }
-        Alert.alert('Gallery copies may remain', lines.join(' '));
+        toast.warning('Gallery copies may remain', lines.join(' '));
       } else if (fail > 0) {
-        Alert.alert(
+        toast.info(
           'Import finished',
           `${ok} photo${ok === 1 ? '' : 's'} imported.${fail ? ` ${fail} could not be copied.` : ''}`
         );
       } else if (ok > 1) {
-        Alert.alert('Imported', `${ok} photos added to your vault.`);
+        toast.success('Imported', `${ok} photos added to your vault.`);
+      } else if (ok === 1) {
+        toast.success('Imported', 'Photo added to your vault.');
       }
     } finally {
       if (!keepLockedForMove) {
@@ -190,20 +229,13 @@ export default function PhotosScreen() {
     navigation.setOptions({
       headerRight: () => (
         <View style={styles.headerRow}>
-          <Pressable
-            onPress={() => {
-              setGalleryMode((g) => !g);
-              void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-            }}
-            hitSlop={10}
-            style={styles.headerBtn}>
-            <FontAwesome name={galleryMode ? 'list' : 'th-large'} size={20} color={vaultTheme.gold} />
-          </Pressable>
+          <ShowcaseModeToggle mode={showcaseMode} onChange={onShowcaseChange} />
           <Pressable
             onPress={() => void pickPhotos()}
             hitSlop={10}
             disabled={importing || launchingMoveFlow}
-            style={styles.headerBtn}>
+            style={styles.headerBtn}
+            accessibilityLabel="Import photos">
             {importing || launchingMoveFlow ? (
               <ActivityIndicator color={vaultTheme.gold} size="small" />
             ) : (
@@ -213,32 +245,33 @@ export default function PhotosScreen() {
         </View>
       ),
     });
-  }, [navigation, pickPhotos, galleryMode, importing, launchingMoveFlow]);
+  }, [navigation, pickPhotos, showcaseMode, onShowcaseChange, importing, launchingMoveFlow]);
 
   return (
     <VaultLuxuryBackground>
       <Text style={styles.hint}>
-        Multi-select in the picker. On Android, turning on “Remove originals from gallery” opens a
-        move-from-gallery view so AR Vault can copy exact items into the vault and remove those
-        originals after import. Toggle grid/list from the header.
+        Tap + to import. Use the header switch for Icons or List view. Turn on “Remove originals
+        from gallery” in Settings to keep photos private after import.
       </Text>
       <VaultSearchBar value={query} onChangeText={setQuery} placeholder="Search photos…" />
-      {galleryMode ? (
+      {showcaseMode === 'icons' ? (
         <PhotoGalleryGrid
           items={items}
           searchQuery={query}
           refreshing={refreshing}
           onRefresh={() => void onRefresh()}
-          emptyHint="Tap + to import photos. On Android, “Remove originals” opens a move-from-gallery flow; otherwise imports keep the public copy."
+          onClearSearch={clearSearch}
+          emptyHint="No photos yet. Tap + to import into your private vault."
         />
       ) : (
         <VaultItemList
           items={items}
           refreshing={refreshing}
           onRefresh={() => void onRefresh()}
-          emptyHint="Tap + to import photos. Switch to grid view for a gallery layout."
+          onClearSearch={clearSearch}
+          emptyHint="No photos yet. Tap + to import, or switch to Icons view."
           searchQuery={query}
-          showPhotoThumbs
+          showMediaThumbs
         />
       )}
     </VaultLuxuryBackground>

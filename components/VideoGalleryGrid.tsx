@@ -1,5 +1,5 @@
 import FontAwesome from '@expo/vector-icons/FontAwesome';
-import { Image } from 'expo-image';
+import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import React, { useCallback, useMemo } from 'react';
 import {
@@ -13,9 +13,10 @@ import {
   View,
 } from 'react-native';
 
+import { clearVaultVideoThumb, VaultVideoThumb } from '@/components/VaultVideoThumb';
 import { vaultTheme } from '@/constants/vaultTheme';
 import { confirm, toast } from '@/lib/notify';
-import { absoluteFilePath, deleteItem } from '@/lib/vaultStore';
+import { deleteItem } from '@/lib/vaultStore';
 import type { VaultItem } from '@/types/vault';
 
 const GAP = 8;
@@ -31,7 +32,7 @@ type Props = {
   onClearSearch?: () => void;
 };
 
-export function PhotoGalleryGrid({
+export function VideoGalleryGrid({
   items,
   searchQuery,
   refreshing,
@@ -63,8 +64,9 @@ export function PhotoGalleryGrid({
         if (!ok) return;
         try {
           await deleteItem(item);
+          clearVaultVideoThumb(item.id);
           onRefresh();
-          toast.success('Deleted', 'Photo removed from vault.');
+          toast.success('Deleted', 'Video removed from vault.');
         } catch {
           toast.error('Could not delete', 'Something went wrong. Please try again.');
         }
@@ -78,14 +80,20 @@ export function PhotoGalleryGrid({
       <View style={[styles.cellWrap, { width: cell }]}>
         <Pressable
           style={({ pressed }) => [styles.thumbPress, pressed && { opacity: 0.92 }]}
-          onPress={() => router.push({ pathname: '/viewer', params: { id: item.id } })}>
-          <Image
-            source={{ uri: absoluteFilePath(item.fileName) }}
-            style={styles.thumb}
-            contentFit="cover"
-            transition={100}
+          onPress={() => router.push({ pathname: '/viewer', params: { id: item.id } })}
+          accessibilityLabel={`Open ${item.name}`}>
+          <View style={styles.thumbFrame}>
+            <VaultVideoThumb item={item} />
+          </View>
+          <LinearGradient
+            colors={['transparent', 'rgba(8,7,7,0.72)']}
+            style={styles.thumbShade}
+            pointerEvents="none"
           />
-          <View style={styles.thumbBorder} />
+          <View style={styles.playBubble} pointerEvents="none">
+            <FontAwesome name="play" size={11} color={vaultTheme.bgDeep} />
+          </View>
+          <View style={styles.thumbBorder} pointerEvents="none" />
         </Pressable>
         <Pressable
           style={styles.trashFab}
@@ -107,12 +115,12 @@ export function PhotoGalleryGrid({
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={vaultTheme.gold} />
         }>
         <FontAwesome
-          name={isSearchMiss ? 'search' : 'picture-o'}
+          name={isSearchMiss ? 'search' : 'file-video-o'}
           size={48}
           color={vaultTheme.textMuted}
         />
         <Text style={styles.emptyText}>
-          {isSearchMiss ? `No photos match “${searchQuery.trim()}”.` : emptyHint}
+          {isSearchMiss ? `No videos match “${searchQuery.trim()}”.` : emptyHint}
         </Text>
         {isSearchMiss && onClearSearch ? (
           <Pressable style={styles.clearSearchBtn} onPress={onClearSearch}>
@@ -125,7 +133,7 @@ export function PhotoGalleryGrid({
 
   return (
     <FlatList
-      key={`grid-${Math.round(cell)}`}
+      key={`video-grid-${Math.round(cell)}`}
       data={filtered}
       keyExtractor={(item) => item.id}
       numColumns={COLS}
@@ -135,8 +143,8 @@ export function PhotoGalleryGrid({
       refreshControl={
         <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={vaultTheme.gold} />
       }
-      initialNumToRender={18}
-      maxToRenderPerBatch={18}
+      initialNumToRender={12}
+      maxToRenderPerBatch={9}
       windowSize={7}
       removeClippedSubviews
     />
@@ -175,10 +183,24 @@ const styles = StyleSheet.create({
   row: { gap: GAP, marginBottom: GAP },
   cellWrap: { position: 'relative' },
   thumbPress: { borderRadius: 12, overflow: 'hidden' },
-  thumb: {
+  thumbFrame: {
     width: '100%',
     aspectRatio: 1,
     backgroundColor: vaultTheme.bgElevated,
+  },
+  thumbShade: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  playBubble: {
+    position: 'absolute',
+    left: 8,
+    bottom: 8,
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: vaultTheme.gold,
   },
   thumbBorder: {
     ...StyleSheet.absoluteFillObject,

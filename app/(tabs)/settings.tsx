@@ -2,7 +2,6 @@ import * as Haptics from 'expo-haptics';
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   Platform,
   Pressable,
   ScrollView,
@@ -23,6 +22,7 @@ import {
   importVaultFromZipPicker,
   restoreVaultFromAndroidFolder,
 } from '@/lib/vaultBackup';
+import { toast } from '@/lib/notify';
 import { getHideGalleryAfterImport, setHideGalleryAfterImport } from '@/lib/vaultPrefs';
 
 export default function SettingsScreen() {
@@ -56,19 +56,23 @@ export default function SettingsScreen() {
       if (kind === 'folder') {
         const releaseExternalFlow = suppressBackgroundLock();
         const r = await backupVaultToAndroidFolder().finally(releaseExternalFlow);
-        Alert.alert(r.ok ? 'Backup done' : 'Backup', r.message);
+        if (r.ok) toast.success('Backup done', r.message);
+        else toast.error('Backup', r.message);
       } else {
         const path = await exportVaultToZipFile();
         const can = await Sharing.isAvailableAsync();
         if (!can) {
-          Alert.alert('Sharing unavailable', `ZIP created at cache path; use Android folder backup instead.`);
+          toast.warning(
+            'Sharing unavailable',
+            'ZIP created at cache path; use Android folder backup instead.'
+          );
           return;
         }
         const releaseExternalFlow = suppressBackgroundLock();
         await Sharing.shareAsync(path).finally(releaseExternalFlow);
       }
     } catch (e) {
-      Alert.alert('Backup failed', e instanceof Error ? e.message : 'Unknown error');
+      toast.error('Backup failed', e instanceof Error ? e.message : 'Unknown error');
     } finally {
       setBusy(null);
     }
@@ -79,7 +83,8 @@ export default function SettingsScreen() {
     try {
       const releaseExternalFlow = suppressBackgroundLock();
       const r = await importVaultFromZipPicker().finally(releaseExternalFlow);
-      Alert.alert(r.ok ? 'Restored' : 'Restore', r.message);
+      if (r.ok) toast.success('Restored', r.message);
+      else toast.error('Restore', r.message);
     } finally {
       setBusy(null);
     }
@@ -90,7 +95,8 @@ export default function SettingsScreen() {
     try {
       const releaseExternalFlow = suppressBackgroundLock();
       const r = await restoreVaultFromAndroidFolder().finally(releaseExternalFlow);
-      Alert.alert(r.ok ? 'Restored' : 'Restore', r.message);
+      if (r.ok) toast.success('Restored', r.message);
+      else toast.error('Restore', r.message);
     } finally {
       setBusy(null);
     }
