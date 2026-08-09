@@ -113,7 +113,7 @@ export function VaultItemList({
               </RNView>
             ) : mediaThumbs && item.category === 'video' ? (
               <RNView style={styles.thumbBox}>
-                <VaultVideoThumb item={item} />
+                <VaultVideoThumb item={item} compact />
                 <RNView style={styles.listPlayDot} pointerEvents="none">
                   <FontAwesome name="play" size={8} color={vaultTheme.bgDeep} />
                 </RNView>

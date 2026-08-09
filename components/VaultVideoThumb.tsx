@@ -1,91 +1,42 @@
 import FontAwesome from '@expo/vector-icons/FontAwesome';
-import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
-import { createVideoPlayer, type VideoThumbnail } from 'expo-video';
-import React, { useEffect, useState } from 'react';
+import React from 'react';
 import { StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native';
 
 import { vaultTheme } from '@/constants/vaultTheme';
-import { absoluteFilePath } from '@/lib/vaultStore';
 import type { VaultItem } from '@/types/vault';
 
-const thumbnailCache = new Map<string, VideoThumbnail | null>();
-const thumbnailTasks = new Map<string, Promise<VideoThumbnail | null>>();
-
-export function clearVaultVideoThumb(cacheKey: string) {
-  thumbnailCache.delete(cacheKey);
-}
-
-async function loadVaultVideoThumbnail(uri: string, cacheKey: string): Promise<VideoThumbnail | null> {
-  if (thumbnailCache.has(cacheKey)) {
-    return thumbnailCache.get(cacheKey) ?? null;
-  }
-
-  const pending = thumbnailTasks.get(cacheKey);
-  if (pending) return pending;
-
-  const task = (async () => {
-    const player = createVideoPlayer({ uri });
-    try {
-      const thumbs = await player.generateThumbnailsAsync(0.2, { maxWidth: 360 });
-      const thumb = thumbs[0] ?? null;
-      thumbnailCache.set(cacheKey, thumb);
-      return thumb;
-    } catch {
-      thumbnailCache.set(cacheKey, null);
-      return null;
-    } finally {
-      thumbnailTasks.delete(cacheKey);
-      player.release();
-    }
-  })();
-
-  thumbnailTasks.set(cacheKey, task);
-  return task;
+/**
+ * Intentionally does NOT call expo-video createVideoPlayer / generateThumbnailsAsync.
+ * On many physical Android devices, creating ExoPlayer instances while opening the Video
+ * tab (grid/list of vault files) hard-crashes the process. A static tile keeps the tab stable;
+ * real playback stays in the viewer.
+ */
+export function clearVaultVideoThumb(_cacheKey: string) {
+  /* no-op — kept for call-site compatibility */
 }
 
 type Props = {
   item: VaultItem;
   style?: StyleProp<ViewStyle>;
+  compact?: boolean;
 };
 
-export function VaultVideoThumb({ item, style }: Props) {
-  const uri = absoluteFilePath(item.fileName);
-  const [thumbnail, setThumbnail] = useState<VideoThumbnail | null>(
-    () => thumbnailCache.get(item.id) ?? null
-  );
-
-  useEffect(() => {
-    let active = true;
-    if (thumbnailCache.has(item.id)) {
-      setThumbnail(thumbnailCache.get(item.id) ?? null);
-      return () => {
-        active = false;
-      };
-    }
-    void loadVaultVideoThumbnail(uri, item.id).then((thumb) => {
-      if (active) setThumbnail(thumb);
-    });
-    return () => {
-      active = false;
-    };
-  }, [item.id, uri]);
-
+export function VaultVideoThumb({ item, style, compact = false }: Props) {
   return (
-    <View style={[styles.fill, style]}>
-      {thumbnail ? (
-        <Image source={thumbnail} style={StyleSheet.absoluteFill} contentFit="cover" transition={120} />
-      ) : (
-        <LinearGradient
-          colors={['rgba(239,207,156,0.14)', 'rgba(21,17,15,0.95)']}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          style={StyleSheet.absoluteFill}>
-          <View style={styles.fallbackBubble}>
-            <FontAwesome name="film" size={18} color={vaultTheme.bgDeep} />
+    <View style={[styles.fill, style]} accessibilityLabel={item.name}>
+      <LinearGradient
+        colors={['rgba(239,207,156,0.18)', 'rgba(34,25,22,0.98)', 'rgba(12,9,8,1)']}
+        start={{ x: 0.1, y: 0 }}
+        end={{ x: 0.9, y: 1 }}
+        style={StyleSheet.absoluteFill}>
+        <View style={styles.glow} />
+        <View style={styles.center}>
+          <View style={[styles.bubble, compact && styles.bubbleCompact]}>
+            <FontAwesome name="film" size={compact ? 14 : 20} color={vaultTheme.bgDeep} />
           </View>
-        </LinearGradient>
-      )}
+        </View>
+      </LinearGradient>
     </View>
   );
 }
@@ -95,10 +46,35 @@ const styles = StyleSheet.create({
     width: '100%',
     height: '100%',
     backgroundColor: vaultTheme.bgElevated,
+    overflow: 'hidden',
   },
-  fallbackBubble: {
+  glow: {
+    position: 'absolute',
+    top: -20,
+    right: -10,
+    width: 90,
+    height: 90,
+    borderRadius: 45,
+    backgroundColor: vaultTheme.glowSoft,
+  },
+  center: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  bubble: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: vaultTheme.gold,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.18)',
+  },
+  bubbleCompact: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
   },
 });

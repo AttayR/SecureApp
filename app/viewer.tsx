@@ -5,6 +5,7 @@ import * as Haptics from 'expo-haptics';
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useLocalSearchParams, useRouter } from 'expo-router';
+import * as FileSystem from 'expo-file-system/legacy';
 import { VideoView, useVideoPlayer } from 'expo-video';
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
@@ -30,13 +31,105 @@ import { confirm, toast } from '@/lib/notify';
 import { absoluteFilePath, deleteItem, loadItems } from '@/lib/vaultStore';
 import type { VaultItem } from '@/types/vault';
 
-function VaultVideoSection({ uri }: { uri: string }) {
-  const player = useVideoPlayer({ uri }, (p) => {
+function VaultVideoPlayer({ uri }: { uri: string }) {
+  const player = useVideoPlayer(uri, (p) => {
     p.loop = false;
+    // Avoid fighting other audio / codec sessions on open.
+    p.muted = false;
   });
+
+  useEffect(() => {
+    const statusSub = player.addListener('statusChange', ({ status, error }) => {
+      if (status === 'error') {
+        toast.error('Playback error', error?.message ?? 'This video could not be played on this device.');
+      }
+    });
+    // Start after the native view attaches — immediate play() can crash some Android devices.
+    const start = setTimeout(() => {
+      try {
+        player.play();
+      } catch {
+        /* ignore */
+      }
+    }, 120);
+    return () => {
+      clearTimeout(start);
+      statusSub.remove();
+      try {
+        player.pause();
+      } catch {
+        /* ignore */
+      }
+    };
+  }, [player]);
+
   return (
-    <VideoView style={styles.video} player={player} nativeControls contentFit="contain" />
+    <VideoView
+      style={styles.video}
+      player={player}
+      nativeControls
+      contentFit="contain"
+      // SurfaceView + overlapping chrome crashes on many physical Android devices.
+      surfaceType={Platform.OS === 'android' ? 'textureView' : undefined}
+      allowsPictureInPicture={false}
+      fullscreenOptions={{ enable: true }}
+    />
   );
+}
+
+function VaultVideoSection({ uri }: { uri: string }) {
+  const [phase, setPhase] = useState<'checking' | 'ready' | 'missing' | 'error'>('checking');
+
+  useEffect(() => {
+    let cancelled = false;
+    setPhase('checking');
+    (async () => {
+      try {
+        // Give grid thumbnail ExoPlayers a moment to release before we open playback.
+        await new Promise((r) => setTimeout(r, 180));
+        if (cancelled) return;
+        const info = await FileSystem.getInfoAsync(uri);
+        if (cancelled) return;
+        if (!info.exists || info.isDirectory) {
+          setPhase('missing');
+          return;
+        }
+        setPhase('ready');
+      } catch {
+        if (!cancelled) setPhase('error');
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [uri]);
+
+  if (phase === 'checking') {
+    return (
+      <View style={styles.videoLoading}>
+        <ActivityIndicator size="large" color={vaultTheme.gold} />
+        <Text style={styles.videoLoadingText}>Opening video…</Text>
+      </View>
+    );
+  }
+
+  if (phase === 'missing') {
+    return (
+      <View style={styles.videoLoading}>
+        <Text style={styles.videoLoadingText}>Video file is missing from the vault.</Text>
+      </View>
+    );
+  }
+
+  if (phase === 'error') {
+    return (
+      <View style={styles.videoLoading}>
+        <Text style={styles.videoLoadingText}>Could not open this video.</Text>
+      </View>
+    );
+  }
+
+  return <VaultVideoPlayer key={uri} uri={uri} />;
 }
 
 function VaultAudioSection({ uri }: { uri: string }) {
@@ -669,6 +762,19 @@ const styles = StyleSheet.create({
     width: '100%',
     height: '100%',
     backgroundColor: '#000',
+  },
+  videoLoading: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 12,
+    padding: 24,
+    backgroundColor: '#000',
+  },
+  videoLoadingText: {
+    color: vaultTheme.textSecondary,
+    fontSize: 14,
+    textAlign: 'center',
   },
   webFallback: {
     padding: 24,

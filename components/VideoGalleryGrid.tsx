@@ -143,10 +143,10 @@ export function VideoGalleryGrid({
       refreshControl={
         <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={vaultTheme.gold} />
       }
-      initialNumToRender={12}
-      maxToRenderPerBatch={9}
-      windowSize={7}
-      removeClippedSubviews
+      initialNumToRender={9}
+      maxToRenderPerBatch={6}
+      windowSize={5}
+      removeClippedSubviews={false}
     />
   );
 }

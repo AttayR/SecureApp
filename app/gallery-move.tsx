@@ -170,7 +170,8 @@ function VideoPreviewCard({ asset }: { asset: MediaLibrary.Asset }) {
           style={styles.previewVideo}
           player={player}
           nativeControls={false}
-          contentFit="cover"
+          contentFit="contain"
+          surfaceType={Platform.OS === 'android' ? 'textureView' : undefined}
           fullscreenOptions={{ enable: false }}
           allowsPictureInPicture={false}
         />
