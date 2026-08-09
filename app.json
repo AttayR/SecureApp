@@ -1,13 +1,22 @@
 {
   "expo": {
     "name": "AR Vault",
-    "slug": "SecureAPP",
+    "slug": "secureapp",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "secureapp",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/4e3c62d1-ed80-4a05-a9c4-843cf68fe971",
+      "requestHeaders": {
+        "expo-channel-name": "production"
+      }
+    },
     "splash": {
       "image": "./assets/images/icon.png",
       "resizeMode": "contain",
@@ -75,6 +84,13 @@
     ],
     "experiments": {
       "typedRoutes": true
-    }
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "4e3c62d1-ed80-4a05-a9c4-843cf68fe971"
+      }
+    },
+    "owner": "attay15"
   }
 }
