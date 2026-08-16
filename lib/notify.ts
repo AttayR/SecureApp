@@ -1,3 +1,5 @@
+import type { GalleryRestoreTarget } from '@/types/vault';
+
 export type ToastTone = 'success' | 'error' | 'info' | 'warning';
 
 export type ToastRequest = {
@@ -17,9 +19,17 @@ export type ConfirmRequest = {
   ackOnly?: boolean;
 };
 
+export type RestorePlaceRequest = {
+  title: string;
+  message?: string;
+  originalHint?: string;
+  folderDefault?: string;
+};
+
 type NotifyBridge = {
   showToast: (toast: ToastRequest) => void;
   showConfirm: (request: ConfirmRequest) => Promise<boolean>;
+  showRestorePlace: (request: RestorePlaceRequest) => Promise<GalleryRestoreTarget | null>;
 };
 
 let bridge: NotifyBridge | null = null;
@@ -57,4 +67,9 @@ export const toast = {
  */
 export function confirm(request: ConfirmRequest): Promise<boolean> {
   return requireBridge().showConfirm(request);
+}
+
+/** Ask whether to restore media to the original album or a new gallery folder. */
+export function pickRestorePlace(request: RestorePlaceRequest): Promise<GalleryRestoreTarget | null> {
+  return requireBridge().showRestorePlace(request);
 }

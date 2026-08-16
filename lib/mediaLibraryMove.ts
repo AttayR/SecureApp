@@ -13,6 +13,7 @@ export type MediaStoreMoveAsset = {
   width: number;
   height: number;
   duration?: number;
+  albumId?: string;
 };
 
 type MoveMediaLibraryAssetsParams = {
@@ -78,11 +79,22 @@ export async function moveMediaLibraryAssetsToVault(
   let importedCount = 0;
   let copyFailedCount = 0;
   const importedAssetIds: string[] = [];
+  const albumTitleById = new Map<string, string>();
+  try {
+    const albums = await MediaLibrary.getAlbumsAsync();
+    for (const album of albums) {
+      if (album.id && album.title) albumTitleById.set(album.id, album.title);
+    }
+  } catch {
+    /* origin album names are optional */
+  }
 
   for (const asset of assets) {
     const id = makeId();
     const ext = extensionForAsset(category, asset);
     const vaultFileName = `${id}.${ext}`;
+    const sourceAlbumId = asset.albumId?.trim() || undefined;
+    const sourceAlbumName = sourceAlbumId ? albumTitleById.get(sourceAlbumId) : undefined;
 
     try {
       await addItem(
@@ -95,6 +107,8 @@ export async function moveMediaLibraryAssetsToVault(
           mimeType:
             asset.mimeType ??
             (category === 'photo' ? 'image/jpeg' : 'video/mp4'),
+          sourceAlbumId,
+          sourceAlbumName,
         },
         asset.uri
       );

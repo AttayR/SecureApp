@@ -58,7 +58,9 @@ function isVaultItem(value: unknown): value is VaultItem {
     isSafeVaultFileName(item.fileName) &&
     typeof item.createdAt === 'number' &&
     Number.isFinite(item.createdAt) &&
-    (item.mimeType == null || typeof item.mimeType === 'string')
+    (item.mimeType == null || typeof item.mimeType === 'string') &&
+    (item.sourceAlbumId == null || typeof item.sourceAlbumId === 'string') &&
+    (item.sourceAlbumName == null || typeof item.sourceAlbumName === 'string')
   );
 }
 
@@ -195,26 +197,45 @@ export function absoluteFilePath(fileName: string): string {
   return `${vaultRoot()}${fileName}`;
 }
 
+async function deleteVaultFiles(targets: VaultItem[]): Promise<void> {
+  for (const item of targets) {
+    const path = absoluteFilePath(item.fileName);
+    try {
+      const info = await FileSystem.getInfoAsync(path);
+      if (info.exists) {
+        await FileSystem.deleteAsync(path, { idempotent: true });
+      }
+    } catch (error) {
+      if (__DEV__) {
+        console.log('[SecureAPP][VaultStore] file delete failed after metadata removal', {
+          fileName: item.fileName,
+          error: String(error),
+        });
+      }
+    }
+  }
+}
+
 export async function deleteItem(item: VaultItem): Promise<void> {
   await withSerializedQueue('items', async () => {
     const items = (await loadItems()).filter((x) => x.id !== item.id);
     await saveItems(items);
   });
+  await deleteVaultFiles([item]);
+}
 
-  const path = absoluteFilePath(item.fileName);
-  try {
-    const info = await FileSystem.getInfoAsync(path);
-    if (info.exists) {
-      await FileSystem.deleteAsync(path, { idempotent: true });
-    }
-  } catch (error) {
-    if (__DEV__) {
-      console.log('[SecureAPP][VaultStore] file delete failed after metadata removal', {
-        fileName: item.fileName,
-        error: String(error),
-      });
-    }
+export async function deleteItems(targets: VaultItem[]): Promise<void> {
+  if (targets.length === 0) return;
+  if (targets.length === 1) {
+    await deleteItem(targets[0]);
+    return;
   }
+  const ids = new Set(targets.map((item) => item.id));
+  await withSerializedQueue('items', async () => {
+    const items = (await loadItems()).filter((x) => !ids.has(x.id));
+    await saveItems(items);
+  });
+  await deleteVaultFiles(targets);
 }
 
 export async function loadApps(): Promise<VaultAppShortcut[]> {

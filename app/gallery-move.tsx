@@ -394,6 +394,7 @@ export default function GalleryMoveScreen() {
           width: asset.width,
           height: asset.height,
           duration: asset.duration,
+          albumId: asset.albumId,
         })),
     [assets, selectedSet]
   );

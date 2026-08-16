@@ -16,6 +16,7 @@ import { vaultTheme } from '@/constants/vaultTheme';
 import { confirm, toast } from '@/lib/notify';
 import { absoluteFilePath, deleteItem } from '@/lib/vaultStore';
 import type { VaultItem } from '@/types/vault';
+import type { VaultSelectionHandlers } from '@/hooks/useVaultBatchSelection';
 
 type Props = {
   items: VaultItem[];
@@ -28,7 +29,7 @@ type Props = {
   /** @deprecated use showMediaThumbs */
   showPhotoThumbs?: boolean;
   onClearSearch?: () => void;
-};
+} & Partial<VaultSelectionHandlers>;
 
 export function VaultItemList({
   items,
@@ -39,6 +40,10 @@ export function VaultItemList({
   showMediaThumbs,
   showPhotoThumbs = false,
   onClearSearch,
+  selecting = false,
+  selectedIds,
+  onToggleSelect,
+  onEnterSelection,
 }: Props) {
   const mediaThumbs = showMediaThumbs ?? showPhotoThumbs;
   const router = useRouter();
@@ -78,7 +83,7 @@ export function VaultItemList({
       refreshControl={
         <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={vaultTheme.gold} />
       }
-      contentContainerStyle={filtered.length === 0 ? styles.emptyContainer : styles.list}
+      contentContainerStyle={filtered.length === 0 ? styles.emptyContainer : [styles.list, selecting && styles.listSelecting]}
       ListEmptyComponent={
         <RNView style={styles.empty}>
           <RNView style={styles.emptyIconRing}>
@@ -98,11 +103,31 @@ export function VaultItemList({
           ) : null}
         </RNView>
       }
-      renderItem={({ item }) => (
+      renderItem={({ item }) => {
+        const selected = !!selectedIds?.has(item.id);
+        return (
         <RNView style={styles.rowWrap}>
           <Pressable
-            style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}
-            onPress={() => router.push({ pathname: '/viewer', params: { id: item.id } })}>
+            style={({ pressed }) => [
+              styles.row,
+              selected && styles.rowSelected,
+              pressed && styles.rowPressed,
+            ]}
+            onPress={() => {
+              if (selecting && onToggleSelect) {
+                onToggleSelect(item);
+                return;
+              }
+              router.push({ pathname: '/viewer', params: { id: item.id } });
+            }}
+            onLongPress={() => onEnterSelection?.(item)}>
+            {selecting ? (
+              <RNView style={[styles.check, selected && styles.checkOn]}>
+                {selected ? (
+                  <FontAwesome name="check" size={11} color={vaultTheme.bgDeep} />
+                ) : null}
+              </RNView>
+            ) : null}
             {mediaThumbs && item.category === 'photo' ? (
               <RNView style={styles.thumbBox}>
                 <Image
@@ -129,17 +154,22 @@ export function VaultItemList({
               </Text>
               <Text style={styles.rowMeta}>{new Date(item.createdAt).toLocaleString()}</Text>
             </RNView>
-            <FontAwesome name="chevron-right" size={14} color={vaultTheme.textMuted} />
+            {selecting ? null : (
+              <FontAwesome name="chevron-right" size={14} color={vaultTheme.textMuted} />
+            )}
           </Pressable>
-          <Pressable
-            accessibilityLabel="Delete"
-            hitSlop={12}
-            onPress={() => confirmDelete(item)}
-            style={styles.trash}>
-            <FontAwesome name="trash" size={16} color={vaultTheme.danger} />
-          </Pressable>
+          {selecting ? null : (
+            <Pressable
+              accessibilityLabel="Delete"
+              hitSlop={12}
+              onPress={() => confirmDelete(item)}
+              style={styles.trash}>
+              <FontAwesome name="trash" size={16} color={vaultTheme.danger} />
+            </Pressable>
+          )}
         </RNView>
-      )}
+        );
+      }}
     />
   );
 }
@@ -159,6 +189,7 @@ function iconFor(item: VaultItem) {
 
 const styles = StyleSheet.create({
   list: { paddingHorizontal: 12, paddingBottom: 24, paddingTop: 4 },
+  listSelecting: { paddingBottom: 12 },
   emptyContainer: { flexGrow: 1 },
   empty: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 32, gap: 16 },
   emptyIconRing: {
@@ -208,6 +239,24 @@ const styles = StyleSheet.create({
     elevation: 3,
   },
   rowPressed: { opacity: 0.92 },
+  rowSelected: {
+    borderColor: vaultTheme.gold,
+    backgroundColor: vaultTheme.bgElevated,
+  },
+  check: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    borderWidth: 1.5,
+    borderColor: vaultTheme.borderStrong,
+    marginRight: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  checkOn: {
+    backgroundColor: vaultTheme.gold,
+    borderColor: vaultTheme.gold,
+  },
   iconRing: {
     width: 44,
     height: 44,

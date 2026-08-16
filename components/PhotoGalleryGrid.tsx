@@ -17,10 +17,7 @@ import { vaultTheme } from '@/constants/vaultTheme';
 import { confirm, toast } from '@/lib/notify';
 import { absoluteFilePath, deleteItem } from '@/lib/vaultStore';
 import type { VaultItem } from '@/types/vault';
-
-const GAP = 8;
-const COLS = 3;
-const PAD = 16;
+import type { VaultSelectionHandlers } from '@/hooks/useVaultBatchSelection';
 
 type Props = {
   items: VaultItem[];
@@ -29,7 +26,11 @@ type Props = {
   onRefresh: () => void;
   emptyHint: string;
   onClearSearch?: () => void;
-};
+} & Partial<VaultSelectionHandlers>;
+
+const GAP = 8;
+const COLS = 3;
+const PAD = 16;
 
 export function PhotoGalleryGrid({
   items,
@@ -38,6 +39,10 @@ export function PhotoGalleryGrid({
   onRefresh,
   emptyHint,
   onClearSearch,
+  selecting = false,
+  selectedIds,
+  onToggleSelect,
+  onEnterSelection,
 }: Props) {
   const router = useRouter();
   const { width } = useWindowDimensions();
@@ -74,29 +79,50 @@ export function PhotoGalleryGrid({
   );
 
   const renderItem = useCallback(
-    ({ item }: { item: VaultItem }) => (
-      <View style={[styles.cellWrap, { width: cell }]}>
-        <Pressable
-          style={({ pressed }) => [styles.thumbPress, pressed && { opacity: 0.92 }]}
-          onPress={() => router.push({ pathname: '/viewer', params: { id: item.id } })}>
-          <Image
-            source={{ uri: absoluteFilePath(item.fileName) }}
-            style={styles.thumb}
-            contentFit="cover"
-            transition={100}
-          />
-          <View style={styles.thumbBorder} />
-        </Pressable>
-        <Pressable
-          style={styles.trashFab}
-          onPress={() => confirmDelete(item)}
-          hitSlop={8}
-          accessibilityLabel={`Delete ${item.name}`}>
-          <FontAwesome name="trash" size={12} color="#fff" />
-        </Pressable>
-      </View>
-    ),
-    [cell, confirmDelete, router]
+    ({ item }: { item: VaultItem }) => {
+      const selected = !!selectedIds?.has(item.id);
+      return (
+        <View style={[styles.cellWrap, { width: cell }]}>
+          <Pressable
+            style={({ pressed }) => [styles.thumbPress, pressed && { opacity: 0.92 }]}
+            onPress={() => {
+              if (selecting && onToggleSelect) {
+                onToggleSelect(item);
+                return;
+              }
+              router.push({ pathname: '/viewer', params: { id: item.id } });
+            }}
+            onLongPress={() => onEnterSelection?.(item)}>
+            <Image
+              source={{ uri: absoluteFilePath(item.fileName) }}
+              style={styles.thumb}
+              contentFit="cover"
+              transition={100}
+            />
+            <View style={[styles.thumbBorder, selected && styles.thumbBorderSelected]} />
+            {selecting ? (
+              <View style={[styles.checkBadge, selected && styles.checkBadgeOn]} pointerEvents="none">
+                <FontAwesome
+                  name={selected ? 'check' : 'circle-thin'}
+                  size={selected ? 11 : 16}
+                  color={selected ? vaultTheme.bgDeep : '#fff'}
+                />
+              </View>
+            ) : null}
+          </Pressable>
+          {selecting ? null : (
+            <Pressable
+              style={styles.trashFab}
+              onPress={() => confirmDelete(item)}
+              hitSlop={8}
+              accessibilityLabel={`Delete ${item.name}`}>
+              <FontAwesome name="trash" size={12} color="#fff" />
+            </Pressable>
+          )}
+        </View>
+      );
+    },
+    [cell, confirmDelete, onEnterSelection, onToggleSelect, router, selectedIds, selecting]
   );
 
   if (filtered.length === 0) {
@@ -131,7 +157,7 @@ export function PhotoGalleryGrid({
       numColumns={COLS}
       renderItem={renderItem}
       columnWrapperStyle={styles.row}
-      contentContainerStyle={styles.gridContent}
+      contentContainerStyle={[styles.gridContent, selecting && styles.gridContentSelecting]}
       refreshControl={
         <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={vaultTheme.gold} />
       }
@@ -172,6 +198,7 @@ const styles = StyleSheet.create({
     fontSize: 14,
   },
   gridContent: { paddingHorizontal: PAD, paddingBottom: 32, paddingTop: 4 },
+  gridContentSelecting: { paddingBottom: 16 },
   row: { gap: GAP, marginBottom: GAP },
   cellWrap: { position: 'relative' },
   thumbPress: { borderRadius: 12, overflow: 'hidden' },
@@ -185,6 +212,27 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     borderWidth: 1,
     borderColor: vaultTheme.borderSubtle,
+  },
+  thumbBorderSelected: {
+    borderColor: vaultTheme.gold,
+    borderWidth: 2,
+  },
+  checkBadge: {
+    position: 'absolute',
+    top: 6,
+    left: 6,
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(8,7,7,0.55)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.55)',
+  },
+  checkBadgeOn: {
+    backgroundColor: vaultTheme.gold,
+    borderColor: vaultTheme.gold,
   },
   trashFab: {
     position: 'absolute',

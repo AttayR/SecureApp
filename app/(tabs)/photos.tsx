@@ -11,10 +11,12 @@ import { ShowcaseModeToggle } from '@/components/ShowcaseModeToggle';
 import { VaultItemList } from '@/components/VaultItemList';
 import { VaultLuxuryBackground } from '@/components/VaultLuxuryBackground';
 import { VaultSearchBar } from '@/components/VaultSearchBar';
+import { VaultSelectionBar } from '@/components/VaultSelectionBar';
 import { vaultTheme } from '@/constants/vaultTheme';
 import { useAuth } from '@/contexts/AuthContext';
+import { useVaultBatchActions, useVaultBatchSelection } from '@/hooks/useVaultBatchSelection';
 import { useVaultItems } from '@/hooks/useVaultItems';
-import { removeGalleryAssets } from '@/lib/galleryVault';
+import { removeGalleryAssets, resolveGalleryOrigin } from '@/lib/galleryVault';
 import { makeId } from '@/lib/ids';
 import { toast } from '@/lib/notify';
 import {
@@ -42,6 +44,14 @@ export default function PhotosScreen() {
   const [importing, setImporting] = useState(false);
   const [launchingMoveFlow, setLaunchingMoveFlow] = useState(false);
   const actionLockRef = useRef(false);
+  const selection = useVaultBatchSelection(items, query);
+  const { busy: batchBusy, shareSelected, releaseSelected } = useVaultBatchActions({
+    noun: 'photo',
+    selectedItems: selection.selectedItems,
+    suppressBackgroundLock,
+    refresh,
+    exitSelection: selection.exitSelection,
+  });
 
   useEffect(() => {
     void getShowcaseMode('photo').then(setShowcaseModeState);
@@ -141,6 +151,7 @@ export default function PhotosScreen() {
         const extMatch = a.uri.match(/\.(\w+)(?:\?|$)/);
         const ext = extMatch?.[1]?.toLowerCase() ?? 'jpg';
         const fileName = `${id}.${ext}`;
+        const origin = await resolveGalleryOrigin(a.assetId);
         try {
           await addItem(
             {
@@ -150,6 +161,7 @@ export default function PhotosScreen() {
               fileName,
               createdAt: Date.now(),
               mimeType: a.mimeType ?? 'image/jpeg',
+              ...origin,
             },
             a.uri
           );
@@ -229,29 +241,71 @@ export default function PhotosScreen() {
     navigation.setOptions({
       headerRight: () => (
         <View style={styles.headerRow}>
-          <ShowcaseModeToggle mode={showcaseMode} onChange={onShowcaseChange} />
-          <Pressable
-            onPress={() => void pickPhotos()}
-            hitSlop={10}
-            disabled={importing || launchingMoveFlow}
-            style={styles.headerBtn}
-            accessibilityLabel="Import photos">
-            {importing || launchingMoveFlow ? (
-              <ActivityIndicator color={vaultTheme.gold} size="small" />
-            ) : (
-              <FontAwesome name="plus" size={22} color={vaultTheme.gold} />
-            )}
-          </Pressable>
+          {selection.selecting ? (
+            <Pressable
+              onPress={selection.allVisibleSelected ? selection.clearSelected : selection.selectAllVisible}
+              hitSlop={10}
+              disabled={batchBusy || selection.visibleCount === 0}
+              style={styles.headerBtn}
+              accessibilityLabel={selection.allVisibleSelected ? 'Clear selection' : 'Select all photos'}>
+              <Text style={styles.headerSelectAll}>
+                {selection.allVisibleSelected ? 'Clear' : 'Select all'}
+              </Text>
+            </Pressable>
+          ) : (
+            <>
+              <ShowcaseModeToggle mode={showcaseMode} onChange={onShowcaseChange} />
+              <Pressable
+                onPress={() => selection.enterSelection()}
+                hitSlop={10}
+                disabled={items.length === 0}
+                style={styles.headerBtn}
+                accessibilityLabel="Select photos">
+                <FontAwesome
+                  name="check-square-o"
+                  size={20}
+                  color={items.length === 0 ? vaultTheme.textMuted : vaultTheme.gold}
+                />
+              </Pressable>
+              <Pressable
+                onPress={() => void pickPhotos()}
+                hitSlop={10}
+                disabled={importing || launchingMoveFlow}
+                style={styles.headerBtn}
+                accessibilityLabel="Import photos">
+                {importing || launchingMoveFlow ? (
+                  <ActivityIndicator color={vaultTheme.gold} size="small" />
+                ) : (
+                  <FontAwesome name="plus" size={22} color={vaultTheme.gold} />
+                )}
+              </Pressable>
+            </>
+          )}
         </View>
       ),
     });
-  }, [navigation, pickPhotos, showcaseMode, onShowcaseChange, importing, launchingMoveFlow]);
+  }, [
+    batchBusy,
+    importing,
+    items.length,
+    launchingMoveFlow,
+    navigation,
+    onShowcaseChange,
+    pickPhotos,
+    selection.allVisibleSelected,
+    selection.clearSelected,
+    selection.enterSelection,
+    selection.selectAllVisible,
+    selection.selecting,
+    selection.visibleCount,
+    showcaseMode,
+  ]);
 
   return (
     <VaultLuxuryBackground>
       <Text style={styles.hint}>
-        Tap + to import. Use the header switch for Icons or List view. Turn on “Remove originals
-        from gallery” in Settings to keep photos private after import.
+        Tap + to import. Long-press or use Select to share or move several photos back to your
+        gallery.
       </Text>
       <VaultSearchBar value={query} onChangeText={setQuery} placeholder="Search photos…" />
       {showcaseMode === 'icons' ? (
@@ -262,6 +316,10 @@ export default function PhotosScreen() {
           onRefresh={() => void onRefresh()}
           onClearSearch={clearSearch}
           emptyHint="No photos yet. Tap + to import into your private vault."
+          selecting={selection.selecting}
+          selectedIds={selection.selectedIds}
+          onToggleSelect={selection.toggleSelect}
+          onEnterSelection={selection.enterSelection}
         />
       ) : (
         <VaultItemList
@@ -272,8 +330,26 @@ export default function PhotosScreen() {
           emptyHint="No photos yet. Tap + to import, or switch to Icons view."
           searchQuery={query}
           showMediaThumbs
+          selecting={selection.selecting}
+          selectedIds={selection.selectedIds}
+          onToggleSelect={selection.toggleSelect}
+          onEnterSelection={selection.enterSelection}
         />
       )}
+      {selection.selecting ? (
+        <VaultSelectionBar
+          noun="photo"
+          selectedCount={selection.selectedCount}
+          visibleCount={selection.visibleCount}
+          allSelected={selection.allVisibleSelected}
+          busy={batchBusy}
+          onSelectAll={selection.selectAllVisible}
+          onClear={selection.clearSelected}
+          onShare={shareSelected}
+          onRelease={releaseSelected}
+          onCancel={selection.exitSelection}
+        />
+      ) : null}
     </VaultLuxuryBackground>
   );
 }
@@ -289,4 +365,5 @@ const styles = StyleSheet.create({
   },
   headerRow: { flexDirection: 'row', alignItems: 'center', marginRight: 8, gap: 4 },
   headerBtn: { padding: 8 },
+  headerSelectAll: { color: vaultTheme.gold, fontWeight: '800', fontSize: 14, paddingHorizontal: 4 },
 });

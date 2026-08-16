@@ -2,10 +2,13 @@ import FontAwesome from '@expo/vector-icons/FontAwesome';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Animated,
+  KeyboardAvoidingView,
   Modal,
+  Platform,
   Pressable,
   StyleSheet,
   Text,
+  TextInput,
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -14,15 +17,23 @@ import { vaultTheme } from '@/constants/vaultTheme';
 import {
   registerNotifyBridge,
   type ConfirmRequest,
+  type RestorePlaceRequest,
   type ToastRequest,
   type ToastTone,
 } from '@/lib/notify';
+import { DEFAULT_RESTORE_FOLDER } from '@/lib/galleryVault';
+import type { GalleryRestoreTarget } from '@/types/vault';
 
 type ActiveToast = ToastRequest & { id: number };
 
 type ActiveConfirm = ConfirmRequest & {
   id: number;
   resolve: (value: boolean) => void;
+};
+
+type ActiveRestorePlace = RestorePlaceRequest & {
+  id: number;
+  resolve: (value: GalleryRestoreTarget | null) => void;
 };
 
 const TOAST_ICON: Record<ToastTone, React.ComponentProps<typeof FontAwesome>['name']> = {
@@ -43,6 +54,9 @@ export function NotifyProvider({ children }: { children: React.ReactNode }) {
   const insets = useSafeAreaInsets();
   const [toast, setToast] = useState<ActiveToast | null>(null);
   const [confirmState, setConfirmState] = useState<ActiveConfirm | null>(null);
+  const [restorePlace, setRestorePlace] = useState<ActiveRestorePlace | null>(null);
+  const [folderName, setFolderName] = useState(DEFAULT_RESTORE_FOLDER);
+  const [folderMode, setFolderMode] = useState(false);
   const toastOpacity = useRef(new Animated.Value(0)).current;
   const toastTranslate = useRef(new Animated.Value(18)).current;
   const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -88,10 +102,19 @@ export function NotifyProvider({ children }: { children: React.ReactNode }) {
     });
   }, []);
 
+  const showRestorePlace = useCallback((request: RestorePlaceRequest) => {
+    return new Promise<GalleryRestoreTarget | null>((resolve) => {
+      const id = ++seq.current;
+      setFolderMode(false);
+      setFolderName(request.folderDefault?.trim() || DEFAULT_RESTORE_FOLDER);
+      setRestorePlace({ ...request, id, resolve });
+    });
+  }, []);
+
   useEffect(() => {
-    registerNotifyBridge({ showToast, showConfirm });
+    registerNotifyBridge({ showToast, showConfirm, showRestorePlace });
     return () => registerNotifyBridge(null);
-  }, [showConfirm, showToast]);
+  }, [showConfirm, showRestorePlace, showToast]);
 
   useEffect(() => {
     return () => {
@@ -104,6 +127,14 @@ export function NotifyProvider({ children }: { children: React.ReactNode }) {
       current?.resolve(value);
       return null;
     });
+  }, []);
+
+  const closeRestorePlace = useCallback((value: GalleryRestoreTarget | null) => {
+    setRestorePlace((current) => {
+      current?.resolve(value);
+      return null;
+    });
+    setFolderMode(false);
   }, []);
 
   const accent = toast ? TOAST_ACCENT[toast.tone] : vaultTheme.gold;
@@ -194,6 +225,82 @@ export function NotifyProvider({ children }: { children: React.ReactNode }) {
             </View>
           </View>
         </View>
+      </Modal>
+
+      <Modal
+        visible={restorePlace != null}
+        transparent
+        animationType="fade"
+        statusBarTranslucent
+        onRequestClose={() => closeRestorePlace(null)}>
+        <KeyboardAvoidingView
+          style={styles.modalRoot}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+          <Pressable style={styles.modalBackdrop} onPress={() => closeRestorePlace(null)} />
+          <View style={[styles.confirmCard, { marginBottom: Math.max(insets.bottom, 16) }]}>
+            <Text style={styles.confirmTitle}>{restorePlace?.title}</Text>
+            {restorePlace?.message ? (
+              <Text style={styles.confirmMessage}>{restorePlace.message}</Text>
+            ) : null}
+
+            <Pressable
+              style={({ pressed }) => [styles.placeOption, pressed && styles.pressed]}
+              onPress={() => closeRestorePlace({ mode: 'original' })}>
+              <FontAwesome name="undo" size={16} color={vaultTheme.gold} />
+              <View style={styles.placeCopy}>
+                <Text style={styles.placeTitle}>Original location</Text>
+                <Text style={styles.placeHint}>
+                  {restorePlace?.originalHint ??
+                    'Put files back in the same gallery album they came from.'}
+                </Text>
+              </View>
+            </Pressable>
+
+            <Pressable
+              style={({ pressed }) => [
+                styles.placeOption,
+                folderMode && styles.placeOptionOn,
+                pressed && styles.pressed,
+              ]}
+              onPress={() => setFolderMode(true)}>
+              <FontAwesome name="folder-open" size={16} color={vaultTheme.gold} />
+              <View style={styles.placeCopy}>
+                <Text style={styles.placeTitle}>New folder</Text>
+                <Text style={styles.placeHint}>Create a gallery album and save the files there.</Text>
+              </View>
+            </Pressable>
+
+            {folderMode ? (
+              <View style={styles.folderBlock}>
+                <TextInput
+                  value={folderName}
+                  onChangeText={setFolderName}
+                  placeholder={DEFAULT_RESTORE_FOLDER}
+                  placeholderTextColor={vaultTheme.textMuted}
+                  autoFocus
+                  style={styles.folderInput}
+                  maxLength={40}
+                />
+                <Pressable
+                  style={({ pressed }) => [styles.confirmBtnPrimary, pressed && styles.pressed]}
+                  onPress={() =>
+                    closeRestorePlace({
+                      mode: 'folder',
+                      folderName: folderName.trim() || DEFAULT_RESTORE_FOLDER,
+                    })
+                  }>
+                  <Text style={styles.confirmBtnPrimaryText}>Save in folder</Text>
+                </Pressable>
+              </View>
+            ) : null}
+
+            <Pressable
+              style={({ pressed }) => [styles.confirmBtnGhost, pressed && styles.pressed]}
+              onPress={() => closeRestorePlace(null)}>
+              <Text style={styles.confirmBtnGhostText}>Cancel</Text>
+            </Pressable>
+          </View>
+        </KeyboardAvoidingView>
       </Modal>
     </View>
   );
@@ -303,6 +410,43 @@ const styles = StyleSheet.create({
   },
   confirmBtnDangerText: {
     color: vaultTheme.danger,
+  },
+  placeOption: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 12,
+    padding: 14,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: vaultTheme.borderSubtle,
+    backgroundColor: vaultTheme.bgGlass,
+  },
+  placeOptionOn: {
+    borderColor: vaultTheme.gold,
+    backgroundColor: 'rgba(224,191,138,0.08)',
+  },
+  placeCopy: { flex: 1, gap: 3 },
+  placeTitle: {
+    color: vaultTheme.champagne,
+    fontWeight: '800',
+    fontSize: 15,
+  },
+  placeHint: {
+    color: vaultTheme.textSecondary,
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  folderBlock: { gap: 10, marginTop: 2 },
+  folderInput: {
+    borderWidth: 1,
+    borderColor: vaultTheme.borderStrong,
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    color: vaultTheme.textPrimary,
+    backgroundColor: vaultTheme.bgElevated,
+    fontSize: 15,
+    fontWeight: '600',
   },
   pressed: { opacity: 0.85 },
 });

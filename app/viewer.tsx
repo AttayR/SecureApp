@@ -26,8 +26,9 @@ import * as Sharing from 'expo-sharing';
 import { VaultLuxuryBackground } from '@/components/VaultLuxuryBackground';
 import { vaultTheme } from '@/constants/vaultTheme';
 import { useAuth } from '@/contexts/AuthContext';
-import { copyVaultFileToGallery } from '@/lib/galleryVault';
-import { confirm, toast } from '@/lib/notify';
+import { DEFAULT_RESTORE_FOLDER, vaultItemHasOriginalLocation } from '@/lib/galleryVault';
+import { confirm, pickRestorePlace, toast } from '@/lib/notify';
+import { releaseVaultItemsToGallery } from '@/lib/vaultMediaActions';
 import { absoluteFilePath, deleteItem, loadItems } from '@/lib/vaultStore';
 import type { VaultItem } from '@/types/vault';
 
@@ -433,52 +434,56 @@ export default function ViewerScreen() {
 
   const confirmReleaseToGallery = () => {
     if (!item || item.category === 'document' || busyRef.current || alertOpenRef.current) return;
-    const target = {
-      id: item.id,
-      uri: absoluteFilePath(item.fileName),
-      name: item.name,
-    };
+    const snapshot = item;
     alertOpenRef.current = true;
     void (async () => {
-      const ok = await confirm({
-        title: 'Release to gallery?',
-        message: `"${target.name}" will be copied to Photos / gallery and removed from the vault.`,
-        confirmLabel: 'Release',
+      const target = await pickRestorePlace({
+        title: 'Move to gallery',
+        message: `"${snapshot.name}" will be copied out of the vault.`,
+        originalHint: vaultItemHasOriginalLocation(snapshot)
+          ? snapshot.sourceAlbumName
+            ? `Back to “${snapshot.sourceAlbumName}”.`
+            : 'Back to the same album it was imported from.'
+          : 'Original album wasn’t saved for this item. It will go to the default gallery.',
+        folderDefault: DEFAULT_RESTORE_FOLDER,
       });
       alertOpenRef.current = false;
-      if (!ok) return;
+      if (!target) return;
       await withBusy(async () => {
         const releaseExternalFlow = suppressBackgroundLock();
-        let copied = false;
         try {
-          copied = await copyVaultFileToGallery(target.uri);
-        } finally {
-          releaseExternalFlow();
-        }
-        if (!copied) {
-          toast.warning(
-            'Could not release',
-            'Allow library access so AR Vault can add this file back to your gallery.'
-          );
-          return;
-        }
-        try {
-          const current = siblingsRef.current.find((s) => s.id === target.id);
-          if (!current) {
-            toast.info('Already removed', 'This item is no longer in the vault.');
+          const result = await releaseVaultItemsToGallery([snapshot], target);
+          if (result.permissionDenied) {
+            toast.warning(
+              'Could not release',
+              'Allow library access so AR Vault can add this file back to your gallery.'
+            );
             return;
           }
-          await deleteItem(current);
+          if (result.released === 0) {
+            toast.warning(
+              'Could not release',
+              'Allow library access so AR Vault can add this file back to your gallery.'
+            );
+            return;
+          }
         } catch {
           toast.error(
             'Partially done',
             'A copy was added to your gallery, but the vault copy could not be removed. Delete it from the vault manually if needed.'
           );
           return;
+        } finally {
+          releaseExternalFlow();
         }
         void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-        toast.success('Released', 'Copied to gallery and removed from vault.');
-        removeCurrentFromPager(target.id);
+        toast.success(
+          'Released',
+          target.mode === 'folder'
+            ? `Saved in “${target.folderName.trim() || DEFAULT_RESTORE_FOLDER}” and removed from vault.`
+            : 'Copied to gallery and removed from vault.'
+        );
+        removeCurrentFromPager(snapshot.id);
       });
     })();
   };
