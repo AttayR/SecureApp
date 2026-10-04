@@ -4,29 +4,31 @@ A private media and document vault for iOS and Android, built with React Native,
 
 AR Vault keeps photos, videos, audio and documents in the app's private storage, behind a PIN and optional biometric unlock. On Android it can move photos and videos out of the system gallery, so the only remaining copy is inside the vault. It can back up and restore the whole vault as a ZIP file, or on Android as a plain folder. It also includes a PIN-gated launcher for other Android apps.
 
-> **Security model in one sentence:** the vault is an **access-control** layer (PIN, biometrics, auto-lock) over files kept in app-private storage. Vault files are **not encrypted by the app**. See [How the security works](#how-the-security-works).
+> **Security model in one sentence:** every vault file and the file list are encrypted with **AES-256-GCM** under a random vault key, which is locked by your PIN (**Argon2id**) and optionally by your biometrics. See [How the security works](#how-the-security-works).
 
 ---
 
 ## Features
 
 ### Security and authentication
-- PIN set on first launch (numeric, 4 to 12 digits), entered twice to confirm.
-- The PIN is stored as a salted SHA-256 hash in `expo-secure-store`. It is never stored in plain text.
-- Optional biometric unlock (Face ID, Touch ID, fingerprint) through `expo-local-authentication`. It is offered only when the device has the hardware and at least one enrolled biometric.
-- When biometrics are enabled, the biometric prompt opens automatically on the lock screen.
-- Auto-lock when the app goes to the background. This is on by default and can be turned off.
-- "Lock vault immediately" actions on the Home and Settings screens.
-- The last successful unlock time is recorded and shown on Home and in Settings.
+- **Encryption at rest:** each file is encrypted with AES-256-GCM in 1 MiB chunks under its own random file key. The vault index (names, types, dates) is encrypted too.
+- **PIN-locked vault key:** a random 256-bit vault key is wrapped with a key derived from the PIN by Argon2id (64 MiB, 3 passes). No PIN hash is stored; a wrong PIN simply fails to unwrap the key.
+- **Biometric unlock that releases the key:** when turned on, a copy of the vault key is stored in the Keychain / Keystore behind biometric authentication (Face ID, Touch ID, fingerprint).
+- **Wrong-PIN throttling:** after 5 wrong PINs, each further attempt waits longer (30 s, doubling, up to 1 hour). The wait survives restarts.
+- **Change PIN:** re-wraps the vault key under the new PIN without re-encrypting files.
+- New PINs need 6–12 digits.
+- Auto-lock when the app goes to the background (on by default). Locking wipes the vault key from memory and deletes all decrypted view copies.
+- The screen is covered whenever the app leaves the foreground, so the app switcher never shows vault content.
+- Existing unencrypted vaults are encrypted automatically on the first unlock after updating.
 
 ### Storage and backup
-- Vault files are copied into `documentDirectory/vault/` under generated file names.
-- A JSON index stores each item's display name, category, MIME type and timestamp. A second copy of the index is written as a fallback.
-- Index writes go through a serialized queue, so concurrent imports or deletes cannot overwrite each other.
-- Index entries are validated when loaded. Entries with a missing category, a bad timestamp, or a file name containing a path separator are dropped.
-- **ZIP backup** (iOS and Android): the index, app shortcuts and all files are packed with JSZip and handed to the system share sheet. The size limit is about 350 MB.
-- **Folder backup** (Android): writes an `ARVault_backup_<timestamp>` folder to a location picked through the Storage Access Framework. This suits large vaults.
-- **Restore** from a ZIP file or a backup folder. A restore first checks that every indexed file is present, then stages the files and swaps them in. If the swap fails, it rolls back to the previous vault and index.
+- Vault files are stored encrypted in `documentDirectory/vault/` under generated file names.
+- Import copies left by the system pickers in the app cache are deleted after the file is encrypted.
+- Index writes go through a serialized queue, and a second encrypted copy of the index is kept as a fallback.
+- **ZIP backup** (iOS and Android): the encrypted files, the encrypted index and the PIN-wrapped vault key, packed with JSZip and handed to the share sheet. The size limit is about 350 MB. The ZIP is deleted from the cache after sharing.
+- **Folder backup** (Android): the same encrypted content written to a folder picked through the Storage Access Framework.
+- **Restore:** a backup of the same vault restores directly. A backup made with another PIN or on another device asks for the PIN it was made with, then re-wraps each file key to the current vault key (only the 80-byte header of each file changes). Restores are staged and roll back if anything fails.
+- Backups made by older, unencrypted versions can still be restored; their files are encrypted right after.
 
 ### Media and documents
 - **Photos:** multi-select import, a grid or list view, and search by name.
@@ -51,48 +53,44 @@ AR Vault keeps photos, videos, audio and documents in the app's private storage,
 
 ## How the security works
 
-This section describes what the code does, including what it does not do.
+### Keys
+```
+PIN ──Argon2id(salt, 64 MiB, 3 passes)──▶ key-encryption key ──AES-256-GCM──▶ vault key (random, 256-bit)
+                                                                                   │
+Biometrics ──Keychain / Keystore item (requireAuthentication)──────────────────────┘
+                                                                                   │
+                                            per-file key (random) ◀──AES-256-GCM──┘
+```
+- `lib/crypto/keyStore.ts` creates the vault key with a secure random generator, wraps it under the PIN, and stores the wrapped key in `expo-secure-store` (`WHEN_UNLOCKED_THIS_DEVICE_ONLY`).
+- Unlocking with the PIN re-derives the key-encryption key and opens the wrapped key. The GCM tag check is what rejects a wrong PIN.
+- With biometrics on, a second copy of the vault key is stored with `requireAuthentication: true` (`WHEN_PASSCODE_SET_THIS_DEVICE_ONLY`). The OS only releases it after a successful biometric check. If the enrolled biometrics change, the OS invalidates it; the app turns biometrics off and asks for the PIN.
+- While unlocked, the vault key exists only in memory. It is zeroed on lock.
+
+### Files (format `ARV1`)
+- Every file has its own random 256-bit key, stored in an 80-byte header wrapped by the vault key.
+- Content is split into 1 MiB chunks, each sealed with AES-256-GCM. The chunk index, an "is last" flag and the header (including the original length) are authenticated with every chunk, so changed, reordered, dropped or truncated data fails to decrypt.
+- Large files are streamed with `expo-file-system` file handles, so they never have to fit in memory.
 
 ### What is stored where
 
 | Data | Location | Protection |
 |---|---|---|
-| PIN hash (`salt:sha256hex`) | `expo-secure-store` | iOS Keychain or Android Keystore-backed storage (library defaults) |
-| Biometric on/off, lock-on-background flag, last unlock time | `expo-secure-store` | Same as above |
+| Wrapped vault key, Argon2id parameters and salt | `expo-secure-store` | Encrypted by the PIN, inside the Keychain / Keystore |
+| Biometric copy of the vault key (optional) | `expo-secure-store` | Released only after biometric authentication |
+| Wrong-PIN counter, biometric and auto-lock settings, last unlock time | `expo-secure-store` | Keychain / Keystore |
+| Vault files | `documentDirectory/vault/` | AES-256-GCM (`ARV1`) |
+| Vault index and app shortcuts | `documentDirectory/vault-*.enc` | AES-256-GCM |
+| Decrypted copies for viewing and sharing | `cacheDirectory/vault-view/` | Deleted on lock and at launch |
+| ZIP and folder backups | Wherever you save them | Encrypted; restoring needs the PIN they were made with |
 | "Remove originals from gallery" preference | AsyncStorage | None (not sensitive) |
-| Vault files (photos, videos, audio, documents) | `documentDirectory/vault/` | App sandbox and OS storage encryption only. **Not encrypted by the app.** |
-| Vault index and app shortcuts (`vault-index.json`, `vault-apps.json`, plus backups) | `documentDirectory/` | Plain JSON. Contains original file names and MIME types. |
-| ZIP backup | `cacheDirectory`, then wherever you share it | **Unencrypted** ZIP |
-| Folder backup (Android) | User-chosen SAF folder | **Unencrypted** files |
 
-### PIN
-- `lib/pin.ts` generates a 16-byte random salt with `expo-crypto` and stores `base64(salt):SHA-256(salt + PIN)` in hex.
-- To unlock, the app recomputes the hash and compares strings.
-- Limitations:
-  - SHA-256 is a fast hash, not a password KDF such as PBKDF2, scrypt or Argon2. A 4 to 12 digit PIN can be brute-forced quickly offline if the hash is ever extracted. In practice it is protected by the Keychain or Keystore.
-  - There is **no attempt limit, delay or lockout** after wrong PINs.
-  - There is **no change-PIN or PIN-reset flow** in the UI.
-
-### Biometrics
-- `LocalAuthentication.authenticateAsync` runs with `disableDeviceFallback: false`, so the **device passcode is also accepted** in place of a biometric.
-- A successful prompt sets an in-memory `unlocked` flag. Biometrics are **not bound to any key or secret**. They gate the UI and do not decrypt anything.
-
-### Locking
-- Lock state lives in React context (`contexts/AuthContext.tsx`). While it is `false`, the root layout renders only the PIN screens, and no vault route is mounted.
-- Auto-lock happens on the `background` AppState event. During system pickers, permission dialogs and the share sheet, auto-lock is paused for up to 120 seconds so those flows do not lock the vault halfway through.
-- Locking does not happen on `inactive`. The app does not blur the app-switcher snapshot and does not block screenshots.
-
-### Files at rest
-- Files are plain copies inside the app sandbox. Their confidentiality depends on the OS (sandboxing and device storage encryption), not on the app.
-- The UI lock does not protect files from anyone with file-system access to the app's data, such as a rooted or jailbroken device or a device backup.
-- Deleting an item removes the file with a normal file delete. It is not a secure wipe.
-- Imports use the pickers' cache copies (`copyToCacheDirectory: true` for documents and audio). Those temporary copies, and exported ZIPs in `cacheDirectory`, are not explicitly deleted by the app.
-
-### What this is not
-- No file or database encryption, and no encryption keys.
-- No network or server component. Nothing is uploaded unless you share or export it yourself.
-
----
+### Limits worth knowing
+- **The PIN is the secret.** Argon2id makes each guess expensive, but a short PIN can still be brute-forced offline if someone copies both the app data and the Keychain / Keystore item. Use a longer PIN for stronger protection. The wrong-PIN wait only applies inside the app.
+- **A forgotten PIN cannot be recovered.** Without it (or a working biometric copy), the vault cannot be decrypted.
+- **Plaintext exists while you look at it.** Viewing, sharing or releasing an item writes a temporary decrypted copy to the app cache. It is deleted when the vault locks or the app next launches, using a normal file delete.
+- **Biometric unlock is as strong as the device's biometric and passcode security.**
+- Items released to the gallery or shared to other apps leave the vault's protection.
+- Android cloud backup of the app's data is turned off (`allowBackup: false`).
 
 ## Architecture
 
@@ -114,7 +112,8 @@ app/_layout.tsx  ── AuthProvider ──┬── not ready ───▶ spin
 Screens ──▶ hooks (useVaultItems, useVaultStats) ──▶ lib/vaultStore ──▶ expo-file-system
 Settings ──▶ lib/vaultBackup (JSZip, SAF, staged restore + rollback)
 Photos/Video ──▶ lib/galleryVault, lib/mediaLibraryMove ──▶ expo-media-library
-AuthContext ──▶ lib/pin (expo-crypto) + expo-secure-store + expo-local-authentication
+AuthContext ──▶ lib/crypto/keyStore (Argon2id, AES-GCM, expo-secure-store) + expo-local-authentication
+vaultStore / viewCache ──▶ lib/crypto/fileCipher (ARV1 streaming encryption)
 ```
 
 ### Project layout
@@ -126,13 +125,17 @@ AuthContext ──▶ lib/pin (expo-crypto) + expo-secure-store + expo-local-aut
 | `components/VaultItemList.tsx`, `PhotoGalleryGrid.tsx` | List and grid views with search filtering and delete |
 | `components/VaultChrome.tsx`, `VaultLuxuryBackground.tsx`, `VaultSearchBar.tsx` | Shared UI chrome |
 | `constants/vaultTheme.ts` | Color tokens and gradients |
-| `contexts/AuthContext.tsx` | Lock state, PIN and biometric unlock, auto-lock, background-lock suppression |
+| `contexts/AuthContext.tsx` | Unlock with PIN or biometrics, migration of old vaults, change PIN, auto-lock |
 | `hooks/useVaultItems.ts`, `useVaultStats.ts` | Load items or per-category counts on screen focus |
-| `lib/vaultStore.ts` | Vault directory, JSON index with backup copy, serialized writes, add and delete |
-| `lib/vaultBackup.ts` | ZIP export and import, Android SAF folder backup and restore, staged restore with rollback |
+| `lib/vaultStore.ts` | Encrypted vault directory and index, add and delete, migration of plaintext files |
+| `lib/vaultBackup.ts` | Encrypted ZIP and Android folder backups, restore with key re-wrapping and rollback |
 | `lib/mediaLibraryMove.ts` | Copies MediaLibrary assets into the vault, then deletes the originals |
 | `lib/galleryVault.ts` | Gallery delete helpers and "release to gallery" |
-| `lib/pin.ts` | Salted SHA-256 PIN hashing and verification |
+| `lib/crypto/primitives.ts` | AES-256-GCM seal/open, Argon2id key derivation, random bytes |
+| `lib/crypto/keyStore.ts` | Vault key creation, PIN and biometric wrapping, wrong-PIN throttling |
+| `lib/crypto/fileCipher.ts` | `ARV1` streaming file encryption, header re-wrapping, encrypted index blobs |
+| `lib/crypto/viewCache.ts` | Temporary decrypted copies for viewing, wiped on lock |
+| `lib/pin.ts` | Checks the old SHA-256 PIN hash once, when upgrading an unencrypted vault |
 | `lib/vaultPrefs.ts` | Non-sensitive preferences in AsyncStorage |
 | `types/vault.ts` | `VaultItem`, `VaultCategory`, `VaultAppShortcut` |
 | `patches/expo-image-picker+17.0.10.patch` | Native patch, see below |
@@ -154,9 +157,10 @@ Applied automatically by `patch-package` on `npm install`. On Android it:
 | | React | 19.1.0 |
 | | TypeScript | 5.9 |
 | Navigation | Expo Router | 6.0.23 |
-| Security | expo-secure-store | 15.0.8 |
+| Security | react-native-quick-crypto (AES-256-GCM, Argon2id) | 1.1.x |
+| | expo-secure-store | 15.0.8 |
 | | expo-local-authentication | 17.0.8 |
-| | expo-crypto | 15.0.8 |
+| | expo-crypto (legacy PIN check only) | 15.0.8 |
 | Files and media | expo-file-system (legacy API) | 19.0.21 |
 | | expo-media-library | 18.2.1 |
 | | expo-image-picker (patched) | 17.0.10 |
