@@ -4,7 +4,6 @@ import React, { useMemo } from 'react';
 import {
   Alert,
   FlatList,
-  Image,
   Pressable,
   RefreshControl,
   StyleSheet,
@@ -13,7 +12,8 @@ import {
 } from 'react-native';
 
 import { vaultTheme } from '@/constants/vaultTheme';
-import { absoluteFilePath, deleteItem } from '@/lib/vaultStore';
+import { VaultImage } from '@/components/VaultImage';
+import { deleteItem } from '@/lib/vaultStore';
 import type { VaultItem } from '@/types/vault';
 
 type Props = {
@@ -78,7 +78,7 @@ export function VaultItemList({
             onPress={() => router.push({ pathname: '/viewer', params: { id: item.id } })}>
             {showPhotoThumbs && item.category === 'photo' ? (
               <RNView style={styles.thumbBox}>
-                <Image source={{ uri: absoluteFilePath(item.fileName) }} style={styles.thumbImg} />
+                <VaultImage item={item} style={styles.thumbImg} />
               </RNView>
             ) : (
               <RNView style={styles.iconRing}>

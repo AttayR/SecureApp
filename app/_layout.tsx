@@ -4,8 +4,8 @@ import { useFonts } from 'expo-font';
 import { Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
-import { useEffect, useMemo } from 'react';
-import { ActivityIndicator, View } from 'react-native';
+import { useEffect, useMemo, useState } from 'react';
+import { ActivityIndicator, AppState, StyleSheet, View } from 'react-native';
 import 'react-native-reanimated';
 
 import { VaultHeaderBackground, VaultHeaderTitle } from '@/components/VaultChrome';
@@ -56,10 +56,41 @@ export default function RootLayout() {
 
   return (
     <AuthProvider>
-      <RootLayoutNav />
+      <View style={styles.fill}>
+        <RootLayoutNav />
+        <PrivacyCover />
+      </View>
     </AuthProvider>
   );
 }
+
+/**
+ * Covers the screen whenever the app is not in the foreground, so the app switcher
+ * snapshot never shows vault content.
+ */
+function PrivacyCover() {
+  const [state, setState] = useState(AppState.currentState);
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', setState);
+    return () => sub.remove();
+  }, []);
+  if (state === 'active') return null;
+  return (
+    <View style={styles.cover} pointerEvents="none">
+      <FontAwesome name="lock" size={44} color={vaultTheme.champagne} />
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  fill: { flex: 1 },
+  cover: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: vaultTheme.bgDeep,
+  },
+});
 
 function RootLayoutNav() {
   const auth = useAuth();

@@ -18,14 +18,27 @@ import { VaultLuxuryBackground } from '@/components/VaultLuxuryBackground';
 import { vaultTheme } from '@/constants/vaultTheme';
 import { useAuth } from '@/contexts/AuthContext';
 
+function formatWait(ms: number): string {
+  const s = Math.ceil(ms / 1000);
+  return s >= 60 ? `${Math.ceil(s / 60)} min` : `${s}s`;
+}
+
 export function VaultAuthScreens() {
-  const { hasPin, biometricEnabled, unlockWithBiometric } = useAuth();
+  const { hasPin, biometricEnabled, unlockWithBiometric, migration } = useAuth();
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!hasPin || !biometricEnabled) return;
-    void unlockWithBiometric();
-  }, [hasPin, biometricEnabled, unlockWithBiometric]);
+    void unlockWithBiometric().then((r) => {
+      if (!r.ok && r.message) setError(r.message);
+    });
+    // Only on first show of the lock screen.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasPin]);
+
+  if (migration) {
+    return <MigrationProgressScreen done={migration.done} total={migration.total} />;
+  }
 
   if (!hasPin) {
     return <SetupPin onError={setError} error={error} />;
@@ -44,8 +57,8 @@ function SetupPin({ error, onError }: { error: string | null; onError: (s: strin
 
   const submitFirst = () => {
     onError(null);
-    if (first.length < 4) {
-      onError('Use at least 4 digits.');
+    if (first.length < 6) {
+      onError('Use at least 6 digits.');
       return;
     }
     setStep('b');
@@ -92,10 +105,12 @@ function SetupPin({ error, onError }: { error: string | null; onError: (s: strin
             <LinearGradient colors={['rgba(212,175,106,0.2)', 'rgba(30,24,48,0.4)']} style={styles.lockOrb}>
               <FontAwesome name="lock" size={40} color={vaultTheme.champagne} />
             </LinearGradient>
-            <Text style={styles.kicker}>Samsung-style private space</Text>
+            <Text style={styles.kicker}>Private vault</Text>
             <Text style={styles.title}>Create your vault PIN</Text>
             <Text style={styles.sub}>
-              {step === 'a' ? 'Choose a PIN (minimum 4 digits).' : 'Confirm your PIN to finish.'}
+              {step === 'a'
+                ? 'Choose a PIN (minimum 6 digits). It encrypts your vault, so it cannot be recovered if you forget it.'
+                : 'Confirm your PIN to finish.'}
             </Text>
             <TextInput
               value={step === 'a' ? first : second}
@@ -132,22 +147,43 @@ function SetupPin({ error, onError }: { error: string | null; onError: (s: strin
 
 function UnlockPin({ error, onError }: { error: string | null; onError: (s: string | null) => void }) {
   const insets = useSafeAreaInsets();
-  const { unlockWithPin, unlockWithBiometric, biometricEnabled, biometricAvailable } = useAuth();
+  const { unlockWithPin, unlockWithBiometric, biometricEnabled, biometricAvailable, pinRetryDelayMs } =
+    useAuth();
   const [pin, setPin] = useState('');
   const [busy, setBusy] = useState(false);
+  const [lockedUntil, setLockedUntil] = useState(0);
+  const [now, setNow] = useState(Date.now());
+
+  // Restore an active wrong-PIN wait (it survives app restarts).
+  useEffect(() => {
+    void pinRetryDelayMs().then((ms) => ms > 0 && setLockedUntil(Date.now() + ms));
+  }, [pinRetryDelayMs]);
+
+  useEffect(() => {
+    if (lockedUntil <= Date.now()) return;
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [lockedUntil]);
+
+  const waitMs = Math.max(0, lockedUntil - now);
 
   const onUnlock = async () => {
     onError(null);
+    if (waitMs > 0) return;
     if (pin.length < 4) {
       onError('Enter your PIN.');
       return;
     }
     setBusy(true);
     try {
-      const ok = await unlockWithPin(pin);
-      if (!ok) {
-        onError('Wrong PIN.');
+      const r = await unlockWithPin(pin);
+      if (!r.ok) {
         setPin('');
+        if (r.waitMs > 0) {
+          setNow(Date.now());
+          setLockedUntil(Date.now() + r.waitMs);
+        }
+        onError(r.reason === 'wrong-pin' ? 'Wrong PIN.' : null);
       }
     } finally {
       setBusy(false);
@@ -158,8 +194,8 @@ function UnlockPin({ error, onError }: { error: string | null; onError: (s: stri
     onError(null);
     setBusy(true);
     try {
-      const ok = await unlockWithBiometric();
-      if (!ok) onError('Biometric unlock failed.');
+      const r = await unlockWithBiometric();
+      if (!r.ok && r.message) onError(r.message);
     } finally {
       setBusy(false);
     }
@@ -193,6 +229,7 @@ function UnlockPin({ error, onError }: { error: string | null; onError: (s: stri
             <Text style={styles.sub}>Enter PIN to open your vault</Text>
             <TextInput
               value={pin}
+              editable={waitMs === 0}
               onChangeText={setPin}
               keyboardType="number-pad"
               secureTextEntry
@@ -203,11 +240,17 @@ function UnlockPin({ error, onError }: { error: string | null; onError: (s: stri
               onSubmitEditing={onUnlock}
             />
             {error ? <Text style={styles.err}>{error}</Text> : null}
+            {waitMs > 0 ? (
+              <Text style={styles.err}>Too many wrong attempts. Try again in {formatWait(waitMs)}.</Text>
+            ) : null}
             {busy ? (
               <ActivityIndicator color={vaultTheme.gold} />
             ) : (
               <>
-                <Pressable style={({ pressed }) => [styles.btn, pressed && styles.btnPressed]} onPress={onUnlock}>
+                <Pressable
+                  style={({ pressed }) => [styles.btn, pressed && styles.btnPressed, waitMs > 0 && styles.btnDisabled]}
+                  disabled={waitMs > 0}
+                  onPress={onUnlock}>
                   <LinearGradient
                     colors={[...vaultTheme.gradientGold] as [string, string]}
                     start={{ x: 0, y: 0 }}
@@ -232,7 +275,27 @@ function UnlockPin({ error, onError }: { error: string | null; onError: (s: stri
   );
 }
 
+function MigrationProgressScreen({ done, total }: { done: number; total: number }) {
+  return (
+    <VaultLuxuryBackground variant="auth">
+      <View style={[styles.flex, styles.migration]}>
+        <LinearGradient colors={['rgba(212,175,106,0.2)', 'rgba(30,24,48,0.4)']} style={styles.lockOrb}>
+          <FontAwesome name="lock" size={40} color={vaultTheme.champagne} />
+        </LinearGradient>
+        <Text style={styles.title}>Encrypting your vault</Text>
+        <Text style={styles.sub}>
+          {total > 0 ? `${done} of ${total} files` : 'Preparing…'}
+          {'\n'}Keep AR Vault open. If it closes, it continues next time you unlock.
+        </Text>
+        <ActivityIndicator color={vaultTheme.gold} />
+      </View>
+    </VaultLuxuryBackground>
+  );
+}
+
 const styles = StyleSheet.create({
+  migration: { alignItems: 'center', justifyContent: 'center', paddingHorizontal: 32 },
+  btnDisabled: { opacity: 0.5 },
   flex: { flex: 1 },
   scrollContent: {
     flexGrow: 1,

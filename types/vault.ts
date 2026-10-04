@@ -8,6 +8,8 @@ export type VaultItem = {
   fileName: string;
   createdAt: number;
   mimeType?: string;
+  /** True once the file on disk is in the encrypted ARV1 format. Missing on items from older versions. */
+  encrypted?: boolean;
 };
 
 export type VaultAppShortcut = {

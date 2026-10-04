@@ -4,7 +4,6 @@ import React, { useMemo } from 'react';
 import {
   Alert,
   Dimensions,
-  Image,
   Pressable,
   RefreshControl,
   ScrollView,
@@ -14,7 +13,8 @@ import {
 } from 'react-native';
 
 import { vaultTheme } from '@/constants/vaultTheme';
-import { absoluteFilePath, deleteItem } from '@/lib/vaultStore';
+import { VaultImage } from '@/components/VaultImage';
+import { deleteItem } from '@/lib/vaultStore';
 import type { VaultItem } from '@/types/vault';
 
 const GAP = 8;
@@ -74,7 +74,7 @@ export function PhotoGalleryGrid({ items, searchQuery, refreshing, onRefresh, em
             <Pressable
               style={({ pressed }) => [styles.thumbPress, pressed && { opacity: 0.92 }]}
               onPress={() => router.push({ pathname: '/viewer', params: { id: item.id } })}>
-              <Image source={{ uri: absoluteFilePath(item.fileName) }} style={styles.thumb} />
+              <VaultImage item={item} style={styles.thumb} />
               <View style={styles.thumbBorder} />
             </Pressable>
             <Pressable style={styles.trashFab} onPress={() => confirmDelete(item)} hitSlop={8}>
