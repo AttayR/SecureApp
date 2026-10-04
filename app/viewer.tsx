@@ -22,7 +22,8 @@ import { VaultLuxuryBackground } from '@/components/VaultLuxuryBackground';
 import { vaultTheme } from '@/constants/vaultTheme';
 import { useAuth } from '@/contexts/AuthContext';
 import { copyVaultFileToGallery } from '@/lib/galleryVault';
-import { absoluteFilePath, deleteItem, loadItems } from '@/lib/vaultStore';
+import { useVaultFileUri } from '@/hooks/useVaultFileUri';
+import { deleteItem, loadItems } from '@/lib/vaultStore';
 import type { VaultItem } from '@/types/vault';
 
 function VaultVideoSection({ uri }: { uri: string }) {
@@ -63,7 +64,8 @@ export default function ViewerScreen() {
   const [item, setItem] = useState<VaultItem | null>(null);
   const [loading, setLoading] = useState(true);
 
-  const uri = item ? absoluteFilePath(item.fileName) : '';
+  const { uri: plainUri, error: decryptError } = useVaultFileUri(item);
+  const uri = plainUri ?? '';
 
   const exitScreen = React.useCallback(() => {
     if (item?.category === 'photo') {
@@ -121,7 +123,7 @@ export default function ViewerScreen() {
   }, [exitScreen, item?.name, navigation]);
 
   const shareFile = async () => {
-    if (!item) return;
+    if (!item || !uri) return;
     const can = await Sharing.isAvailableAsync();
     if (!can) {
       Alert.alert('Sharing is not available on this device.');
@@ -132,7 +134,7 @@ export default function ViewerScreen() {
   };
 
   const confirmReleaseToGallery = () => {
-    if (!item || item.category === 'document') return;
+    if (!item || !uri || item.category === 'document') return;
     Alert.alert(
       'Release to gallery?',
       'This file will be copied back to your Photos / gallery and removed from the vault.',
@@ -166,6 +168,26 @@ export default function ViewerScreen() {
       <VaultLuxuryBackground>
         <View style={styles.center}>
           <ActivityIndicator size="large" color={vaultTheme.gold} />
+        </View>
+      </VaultLuxuryBackground>
+    );
+  }
+
+  if (item && !uri) {
+    return (
+      <VaultLuxuryBackground>
+        <View style={styles.center}>
+          {decryptError ? (
+            <>
+              <Text style={styles.muted}>This file could not be decrypted.</Text>
+              <Text style={styles.errorDetail}>{decryptError}</Text>
+              <Pressable style={styles.backBtn} onPress={exitScreen}>
+                <Text style={styles.backBtnText}>Go back</Text>
+              </Pressable>
+            </>
+          ) : (
+            <ActivityIndicator size="large" color={vaultTheme.gold} />
+          )}
         </View>
       </VaultLuxuryBackground>
     );
@@ -242,6 +264,7 @@ const styles = StyleSheet.create({
   headerBackBtn: { paddingHorizontal: 8, paddingVertical: 4 },
   headerBackText: { color: vaultTheme.champagne, fontSize: 16, fontWeight: '600' },
   muted: { color: vaultTheme.textSecondary, fontSize: 16 },
+  errorDetail: { color: vaultTheme.textMuted, fontSize: 13, marginTop: 8, textAlign: 'center' },
   scroll: { padding: 16, paddingBottom: 48 },
   frameOuter: {
     borderRadius: 22,

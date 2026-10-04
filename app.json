@@ -23,7 +23,8 @@
         "backgroundColor": "#1a1428"
       },
       "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "allowBackup": false
     },
     "web": {
       "bundler": "metro",
@@ -42,7 +43,8 @@
       [
         "expo-secure-store",
         {
-          "configureAndroidBackup": false
+          "configureAndroidBackup": false,
+          "faceIDPermission": "AR Vault uses Face ID to unlock your encrypted vault."
         }
       ],
       [
@@ -59,7 +61,14 @@
       ],
       "expo-video",
       "expo-audio",
-      "expo-asset"
+      "expo-asset",
+      "react-native-quick-crypto",
+      [
+        "expo-local-authentication",
+        {
+          "faceIDPermission": "AR Vault uses Face ID to unlock your encrypted vault."
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true
